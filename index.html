@@ -6,15 +6,15 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="Ritm">
+  <meta name="apple-mobile-web-app-title" content="Andrei OS">
   <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
-  <meta name="description" content="Ritm – calendar și taskuri, făcut ca să termini ce ți-ai propus.">
+  <meta name="description" content="Andrei OS – centrul de comandă: program, obiective, proiecte, echipă, corp și minte.">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <link rel="stylesheet" href="styles.css">
-  <title>Ritm</title>
+  <title>Andrei OS</title>
 </head>
 <body>
   <main id="view" aria-live="polite"></main>
@@ -36,13 +36,13 @@
       <svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M18.5 15.5l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
       <span>Asistent</span><b id="asist-badge" class="tbadge" hidden></b>
     </button>
-    <button data-act="tab" data-tab="list">
-      <svg viewBox="0 0 24 24"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><circle cx="4.8" cy="6.5" r="1.2"/><circle cx="4.8" cy="12" r="1.2"/><circle cx="4.8" cy="17.5" r="1.2"/></svg>
-      <span>Liste</span>
+    <button data-act="tab" data-tab="proj">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.8"/><circle cx="12" cy="12" r="1.3"/></svg>
+      <span>Proiecte</span>
     </button>
-    <button data-act="tab" data-tab="more">
-      <svg viewBox="0 0 24 24"><path d="M4 20V11M10 20V5M16 20v-6M22 20H2"/></svg>
-      <span>Progres</span>
+    <button data-act="tab" data-tab="eu">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20.5c1.2-4 4.3-6 8-6s6.8 2 8 6"/></svg>
+      <span>Eu</span>
     </button>
   </nav>
 
@@ -50,6 +50,9 @@
   <section id="sheet" role="dialog" aria-modal="true" hidden></section>
   <div id="toast" hidden></div>
 
+  <script src="config.js"></script>
   <script src="app.js"></script>
+  <script src="os.js"></script>
+  <script src="sync.js"></script>
 </body>
 </html>

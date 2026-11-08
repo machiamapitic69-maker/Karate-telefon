@@ -1,8 +1,19 @@
-# Ritm – taskuri & calendar pentru iPhone
+# Andrei OS – centrul de comandă personal (iPhone)
 
 Aplicație de planificare (ca Google Calendar, dar orientată pe **terminarea taskurilor**).
 E o aplicație web instalabilă (PWA): merge pe iPhone ca o aplicație normală, pe tot ecranul, și funcționează offline.
 Datele stau doar pe telefonul tău.
+
+## Andrei OS (v3)
+- **Ecranul de dimineață răspunde la cele 5 întrebări**: ce am de făcut, ce e urgent, ce pot delega, ce mă apropie de obiective, ce pot elimina.
+- **Arii de viață**: Academii, REBORN SOCIETY, Competiții, Admin & bani, Antrenamentul meu, Sănătate & minte, Familie & relație, Personal.
+- **Obiective → proiecte → acțiuni → pași**, cu indicatori de progres (ex: 250 → 300 sportivi) și orizont scurt/mediu/lung.
+- **Șabloane de proiect** cu toate sarcinile și termenele calculate de la data evenimentului: Competiție/gală, Produs REBORN, Locație nouă, Campanie de înscrieri.
+- **Delegare**: `@Mihai` în adăugarea rapidă; taskul iese din programul tău și primești reminder să verifici.
+- **Jurnal**: somn, greutate, antrenament (RPE), alimentație, recuperare, energie, stare, concentrare, realizări, lecții, preocupări; grafice pe 30 de zile.
+- **Echilibru**: ore pe săptămână pentru muncă / antrenament / viață personală / sănătate, cu avertisment la suprasolicitare.
+- **Analiza de duminică** + comparații cu acum 3, 6 și 12 luni.
+- **Cont și salvare în cloud** (Supabase, server în UE): sincronizare între dispozitive, copie zilnică în istoric. Configurare: Eu → Setări → Cont & salvare.
 
 ## Asistentul (v2)
 - **Îți face programul singur** – taskurile fără oră sunt puse automat în golurile dintre întâlniri, după prioritate și termen. Ce n-ai apucat se mută singur mai încolo.

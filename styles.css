@@ -326,3 +326,58 @@ input.sw:checked::after { transform: translateX(20px); }
 
 .topic { display: flex; gap: 8px; align-items: center; margin: 8px 0 4px; }
 .topic code { flex: 1; min-width: 0; overflow-wrap: anywhere; background: var(--fill); padding: 8px 10px; border-radius: 8px; font-size: 15px; user-select: all; -webkit-user-select: all; }
+
+/* ---------- v3: Andrei OS ---------- */
+.pad0 { padding: 0 4px 10px; }
+.five { margin-bottom: 12px; }
+.fq { display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 14px; text-align: left; }
+.fq + .fq { border-top: 0.5px solid var(--line); }
+.fq .fi { font-size: 20px; width: 26px; text-align: center; flex: none; }
+.fq .fb { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.fq .fb b { font-size: 15px; font-weight: 600; }
+.fq .fb small { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fq .fn { min-width: 28px; height: 28px; border-radius: 14px; background: var(--fill); display: grid; place-items: center; font-weight: 700; font-size: 14px; padding: 0 8px; }
+.fq.hot .fn { background: var(--danger); color: #fff; }
+.dlg { color: var(--accent); font-weight: 600; }
+.mini.danger { color: var(--danger); background: rgba(255, 59, 48, 0.12); }
+.gcard { display: block; width: 100%; text-align: left; padding: 14px; }
+.gcard + .gcard { border-top: 0.5px solid var(--line); }
+.gtop { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; margin-bottom: 8px; }
+.gtop b { font-size: 16px; word-break: break-word; }
+.gtop span { color: var(--muted); font-size: 14px; font-weight: 600; flex: none; }
+.pbar { height: 8px; background: var(--fill); border-radius: 5px; overflow: hidden; flex: 1; }
+.pbar i { display: block; height: 100%; background: var(--accent); border-radius: 5px; min-width: 2px; transition: width 0.4s; }
+.gcard .meta { margin-top: 8px; }
+.bal { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 14px; }
+.bal span { width: 130px; flex: none; color: var(--muted); }
+.bal b { width: 64px; text-align: right; flex: none; font-variant-numeric: tabular-nums; }
+.warnbox, .okbox { margin-top: 10px; padding: 10px 12px; border-radius: 12px; font-size: 14px; }
+.warnbox { background: rgba(255, 149, 0, 0.14); color: var(--text); }
+.warnbox.soft { background: rgba(236, 72, 153, 0.12); }
+.okbox { background: rgba(52, 199, 89, 0.14); }
+.jnav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.jnav button { width: 40px; height: 40px; border-radius: 50%; background: var(--fill); font-size: 22px; color: var(--accent); }
+.jnav button[disabled] { opacity: 0.3; }
+.row.col { flex-direction: column; align-items: stretch; gap: 8px; }
+.scale { display: flex; gap: 6px; flex-wrap: wrap; }
+.scale button { flex: 1; min-width: 28px; height: 36px; border-radius: 10px; background: var(--fill); font-weight: 600; font-size: 15px; }
+.scale button.on { background: var(--accent); color: #fff; }
+.trends > div { padding: 6px 0; }
+.trends > div + div { border-top: 0.5px solid var(--line); }
+.trends span { font-size: 14px; color: var(--muted); }
+.spark { width: 100%; height: 54px; display: block; }
+.cmp { display: flex; flex-direction: column; gap: 2px; padding: 8px 0; font-size: 14px; }
+.cmp + .cmp { border-top: 0.5px solid var(--line); }
+.up { color: var(--ok); font-weight: 600; }
+.down { color: var(--danger); font-weight: 600; }
+.notes p { margin: 0 0 8px; font-size: 15px; }
+.notes p:last-child { margin: 0; }
+.cin { width: 100%; padding: 11px 12px; border-radius: 10px; border: 0; background: var(--fill); outline: none; text-align: left !important; color: var(--text) !important; }
+.sql { font-size: 11.5px; white-space: pre-wrap; word-break: break-word; background: var(--fill); padding: 10px; border-radius: 10px; margin: 0 0 10px; max-height: 220px; overflow: auto; user-select: all; -webkit-user-select: all; }
+
+.hdr h1 { font-size: clamp(26px, 7.5vw, 32px); }
+.hbtns { flex: none; }
+.hbtns button { white-space: nowrap; }
+.label { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 18px 4px 8px; font-weight: 600; }
+.scale { flex-wrap: nowrap; gap: 4px; }
+.scale button { min-width: 0; padding: 0; }

@@ -43,15 +43,22 @@ const PRIO = { 1: 'Scăzută', 2: 'Normală', 3: 'Importantă' };
 // ============================================================
 // Stare
 // ============================================================
+// Ariile vieții (type = cum se socotește în echilibrul săptămânii)
 const DEFAULT_CATS = [
-  { id: 'munca', name: 'Muncă', color: '#4f7cff' },
-  { id: 'personal', name: 'Personal', color: '#a259ff' },
-  { id: 'sport', name: 'Sport', color: '#ff7a45' },
-  { id: 'sanatate', name: 'Sănătate', color: '#22c55e' },
-  { id: 'casa', name: 'Casă', color: '#f5b700' },
-  { id: 'studiu', name: 'Studiu', color: '#06b6d4' },
+  { id: 'academii', name: 'Academii', color: '#2563eb', type: 'work' },
+  { id: 'reborn', name: 'REBORN SOCIETY', color: '#b8860b', type: 'work' },
+  { id: 'competitii', name: 'Competiții', color: '#ef4444', type: 'work' },
+  { id: 'admin', name: 'Admin & bani', color: '#64748b', type: 'work' },
+  { id: 'sport', name: 'Antrenamentul meu', color: '#ff7a45', type: 'sport' },
+  { id: 'sanatate', name: 'Sănătate & minte', color: '#22c55e', type: 'health' },
+  { id: 'familie', name: 'Familie & relație', color: '#ec4899', type: 'personal' },
+  { id: 'personal', name: 'Personal', color: '#a259ff', type: 'personal' },
 ];
+// puncte de extensie folosite de os.js și sync.js
+const EXT = { migrate: [], beforeSave: [], afterSave: [], nudges: [], reminders: [], meta: [], editor: [], sync: [], todayTop: [] };
+const runMigrations = () => EXT.migrate.forEach((f) => f());
 const DEFAULT_SETTINGS = {
+  name: 'Andrei', maxWork: 50, minPersonal: 10,
   reminder: 10, work: 25, brk: 5, notify: false, dayHours: 8,
   dayStart: '08:00', dayEnd: '22:00', buffer: 10, defaultDur: 30,
   autoPlan: true, autoFollow: true, prepLead: 60,
@@ -68,9 +75,9 @@ const subs = (arr) => arr.map((t) => ({ t, done: false }));
 function seed() {
   return {
     tasks: [
-      { ...baseTask(), title: 'Bun venit în Ritm 👋 Atinge cercul ca să bifezi', duration: 5 },
-      { ...baseTask(), title: 'Deschide tab-ul ✨ Asistent și apasă „Planifică-mi ziua”', priority: 3, cat: 'personal', duration: 5 },
-      { ...baseTask(), title: 'Planifică ziua de mâine', time: '21:30', duration: 10, repeat: 'daily', reminder: 0, cat: 'personal', tpl: 'evening',
+      { ...baseTask(), seed: true, title: 'Bun venit 👋 Atinge cercul ca să bifezi', duration: 5 },
+      { ...baseTask(), seed: true, title: 'Deschide Proiecte și scrie-ți primele 3 obiective', priority: 3, cat: 'personal', duration: 15 },
+      { ...baseTask(), seed: true, title: 'Planifică ziua de mâine', time: '21:30', duration: 10, repeat: 'daily', reminder: 0, cat: 'personal', tpl: 'evening',
         subtasks: subs(['Bifează ce ai terminat', 'Mută restul pe mâine', 'Alege cele 3 lucruri importante']) },
     ],
     cats: DEFAULT_CATS.map((c) => ({ ...c })),
@@ -96,7 +103,10 @@ let state = load();
 let pushTimer;
 function persist() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignorăm */ } }
 function save() {
+  EXT.beforeSave.forEach((f) => f());
+  state.changedAt = Date.now();
   persist();
+  EXT.afterSave.forEach((f) => f());
   updateBadge();
   clearTimeout(pushTimer);
   pushTimer = setTimeout(schedulePushes, 2500);
@@ -252,6 +262,7 @@ function parseQuick(text, baseDate) {
     if (n === 'in' && next === 'zilele' && next2.startsWith('lucratoare')) { res.repeat = 'weekdays'; i += 2; continue; }
     if (n === 'lucratoare' || n === 'l-v') { res.repeat = 'weekdays'; continue; }
     if (/^!+\d?$/.test(n)) { res.priority = n === '!3' ? 1 : 3; continue; }
+    if (raw.startsWith('@') && raw.length > 1) { res.delegatedTo = raw.slice(1).replace(/[,;.]$/, ''); res.delegatedTo = res.delegatedTo[0].toUpperCase() + res.delegatedTo.slice(1); continue; }
     if (n === 'urgent' || n === 'important') { res.priority = 3; keep.push(raw); continue; }
     if (n.startsWith('#') && n.length > 1) {
       const c = state.cats.find((c) => norm(c.name).startsWith(n.slice(1)));
@@ -298,10 +309,10 @@ function planDay(ds) {
   for (const t of tasksOn(ds)) {
     const done = isDone(t, ds);
     if (t.time && (isEvent(t) || !t.auto || done)) { busy.push([tMin(t.time), endMin(t)]); continue; }
-    if (done || isEvent(t)) continue;
+    if (done || isEvent(t) || t.delegatedTo) continue;
     cands.push(t);
   }
-  if (isToday) for (const t of overdue()) if (!isEvent(t) && !cands.includes(t)) cands.push(t);
+  if (isToday) for (const t of overdue()) if (!isEvent(t) && !t.delegatedTo && !cands.includes(t)) cands.push(t);
   const info = cands.map((t) => {
     let earliest = start, latest = dayEnd;
     const ev = linkEvent(t);
@@ -358,7 +369,7 @@ function autoPlanToday(silent) {
 function nudges() {
   const S = state.settings;
   const t = todayStr(), nm = nowMin(), out = [];
-  const today = tasksOn(t);
+  const today = tasksOn(t).filter((x) => !x.delegatedTo);
   const open = today.filter((x) => !isDone(x, t));
   const add = (n) => { if (!state.dismissed[n.key]) out.push(n); };
 
@@ -395,6 +406,7 @@ function nudges() {
         actions: [{ act: 'followup', label: '+ Adaugă ce urmează' }, { act: 'dismiss', v: `follow|${ev.id}|${t}`, label: 'Nimic' }] });
     }
   }
+  EXT.nudges.forEach((f) => f(add));
   // 3. Termene care se apropie
   for (const x of state.tasks) {
     if (!x.deadline || x.done || isRec(x)) continue;
@@ -455,7 +467,8 @@ function nudges() {
 }
 function greeting() {
   const h = new Date().getHours();
-  return h < 5 ? 'Încă treaz? 🌙' : h < 12 ? 'Bună dimineața! ☀️' : h < 18 ? 'Bună ziua! 👋' : 'Bună seara! 🌙';
+  const n = state.settings.name ? ', ' + state.settings.name : '';
+  return h < 5 ? `Încă treaz${n}?` : h < 12 ? `Bună dimineața${n}` : h < 18 ? `Bună ziua${n}` : `Bună seara${n}`;
 }
 function nudgeCard(n) {
   return `<div class="nudge ${n.tone || ''}" ${n.id ? `data-id="${n.id}" data-ds="${n.ds || ''}"` : ''}>
@@ -474,8 +487,9 @@ function buildReminders(fromTs, toTs) {
   const push = (at, title, body, key) => { if (at >= fromTs && at <= toTs) out.push({ at, title, body, key: `${key}|${at}|${title}` }); };
   for (let i = 0; i <= 3; i++) {
     const ds = addDays(t, i);
-    const list = tasksOn(ds);
+    const list = tasksOn(ds).filter((x) => !x.delegatedTo);
     const open = list.filter((x) => !isDone(x, ds));
+    EXT.reminders.forEach((f) => f(ds, push));
     if (S.morning && list.length) {
       const lines = open.slice(0, 8).map((x) => `${x.time ? x.time + ' ' : '• '}${x.title}`);
       push(tsOf(ds, tMin(S.morning)), `Planul de ${ds === t ? 'azi' : relDay(ds).toLowerCase()} 📋`, `${open.length === 1 ? 'Un lucru' : open.length + ' lucruri'}:\n${lines.join('\n')}${open.length > 8 ? '\n…' : ''}`, `brief|${ds}`);
@@ -568,13 +582,15 @@ function nextMonthDay(day) { const d = new Date(); if (d.getDate() > day) d.setM
 const TEMPLATES = [
   { id: 'evening', icon: '🌙', name: 'Plan pentru mâine', desc: '10 minute seara: nu uiți nimic a doua zi', tasks: () => [{ title: 'Planifică ziua de mâine', time: '21:30', duration: 10, repeat: 'daily', cat: 'personal', reminder: 0, subtasks: subs(['Bifează ce ai terminat', 'Mută restul pe mâine', 'Alege cele 3 lucruri importante']) }] },
   { id: 'morning', icon: '🌅', name: 'Rutina de dimineață', desc: 'Pornește ziua cu planul în față', tasks: () => [{ title: 'Rutina de dimineață', time: '07:30', duration: 15, repeat: 'daily', cat: 'sanatate', reminder: 0, subtasks: subs(['Un pahar cu apă', '5 minute de mișcare', 'Citește planul de azi în Ritm']) }] },
-  { id: 'inbox', icon: '📥', name: 'Email & mesaje la ore fixe', desc: 'De 2 ori pe zi, ca să nu te întrerupă tot timpul', tasks: () => [{ title: 'Răspunde la email și mesaje', time: '09:00', duration: 20, repeat: 'weekdays', cat: 'munca', reminder: 0 }, { title: 'Răspunde la email și mesaje', time: '16:30', duration: 20, repeat: 'weekdays', cat: 'munca', reminder: 0 }] },
+  { id: 'inbox', icon: '📥', name: 'Email & mesaje la ore fixe', desc: 'De 2 ori pe zi, ca să nu te întrerupă tot timpul', tasks: () => [{ title: 'Răspunde la email și mesaje', time: '09:00', duration: 20, repeat: 'weekdays', cat: 'admin', reminder: 0 }, { title: 'Răspunde la email și mesaje', time: '16:30', duration: 20, repeat: 'weekdays', cat: 'admin', reminder: 0 }] },
+  { id: 'academyrep', icon: '🥋', name: 'Raport săptămânal academii', desc: 'Luni la 9: prezențe, înscrieri, probleme pe fiecare locație', tasks: () => [{ title: 'Raport săptămânal academii', time: '09:00', duration: 45, repeat: 'days', days: [1], cat: 'academii', reminder: 0, subtasks: subs(['Prezențe pe fiecare locație', 'Înscrieri noi / retrageri', 'Grupe sub 15 sau peste 22', 'Abonamente care expiră', 'Probleme raportate de antrenori', 'Ce deleg săptămâna asta']) }] },
+  { id: 'family', icon: '❤️', name: 'Timp protejat cu familia', desc: 'Seara de duminică și o seară în timpul săptămânii', tasks: () => [{ title: 'Timp cu familia / relația (fără telefon)', time: '19:00', duration: 150, repeat: 'days', days: [0, 3], cat: 'familie', kind: 'event', reminder: 30 }] },
   { id: 'weekly', icon: '🗓', name: 'Recapitulare săptămânală', desc: 'Duminică seara: ce a mers, ce urmează', tasks: () => [{ title: 'Recapitulare săptămânală', time: '18:00', duration: 30, repeat: 'days', days: [0], cat: 'personal', reminder: 0, subtasks: subs(['Ce am terminat săptămâna asta?', 'Ce a rămas și de ce?', 'Ce întâlniri am săptămâna viitoare?', 'Cele 3 obiective ale săptămânii']) }] },
-  { id: 'sport', icon: '💪', name: 'Sport de 3 ori pe săptămână', desc: 'Luni, miercuri și vineri la 18:30', tasks: () => [{ title: 'Antrenament', time: '18:30', duration: 60, repeat: 'days', days: [1, 3, 5], cat: 'sport', kind: 'event', reminder: 30 }] },
+  { id: 'sport', icon: '💪', name: 'Antrenamentul meu de 3 ori pe săptămână', desc: 'Luni, miercuri și vineri dimineața', tasks: () => [{ title: 'Antrenamentul meu', time: '07:00', duration: 75, repeat: 'days', days: [1, 3, 5], cat: 'sport', kind: 'event', reminder: 30 }] },
   { id: 'water', icon: '💧', name: 'Pauze & apă', desc: 'Ridică-te și bea apă la 11, 15 și 17', tasks: () => [11, 15, 17].map((h) => ({ title: 'Pauză: ridică-te și bea apă', time: `${h}:00`, duration: 5, repeat: 'daily', cat: 'sanatate', reminder: 0 })) },
-  { id: 'bills', icon: '🧾', name: 'Facturi lunare', desc: 'Pe 1 ale lunii, cu listă de verificare', tasks: () => [{ title: 'Plătește facturile', date: nextMonthDay(1), time: '19:00', duration: 20, repeat: 'monthly', cat: 'casa', reminder: 0, subtasks: subs(['Curent', 'Gaz', 'Internet & telefon', 'Chirie / rată']) }] },
-  { id: 'home', icon: '🧹', name: 'Curățenie de weekend', desc: 'Sâmbătă la 10, împărțită în pași', tasks: () => [{ title: 'Curățenie', time: '10:00', duration: 90, repeat: 'days', days: [6], cat: 'casa', reminder: 15, subtasks: subs(['Rufe', 'Aspirat', 'Baie', 'Bucătărie', 'Cumpărături pentru săptămână']) }] },
-  { id: 'learn', icon: '📚', name: '20 de minute de învățat', desc: 'În zilele lucrătoare, seara', tasks: () => [{ title: 'Învăț ceva nou (20 min)', time: '20:00', duration: 20, repeat: 'weekdays', cat: 'studiu', reminder: 0 }] },
+  { id: 'bills', icon: '🧾', name: 'Facturi lunare', desc: 'Pe 1 ale lunii, cu listă de verificare', tasks: () => [{ title: 'Plătește facturile', date: nextMonthDay(1), time: '19:00', duration: 20, repeat: 'monthly', cat: 'personal', reminder: 0, subtasks: subs(['Curent', 'Gaz', 'Internet & telefon', 'Chirie / rată']) }] },
+  { id: 'home', icon: '🧹', name: 'Curățenie de weekend', desc: 'Sâmbătă la 10, împărțită în pași', tasks: () => [{ title: 'Curățenie', time: '10:00', duration: 90, repeat: 'days', days: [6], cat: 'personal', reminder: 15, subtasks: subs(['Rufe', 'Aspirat', 'Baie', 'Bucătărie', 'Cumpărături pentru săptămână']) }] },
+  { id: 'learn', icon: '📚', name: '20 de minute de învățat', desc: 'În zilele lucrătoare, seara', tasks: () => [{ title: 'Învăț ceva nou (20 min)', time: '20:00', duration: 20, repeat: 'weekdays', cat: 'personal', reminder: 0 }] },
 ];
 const tplAdded = (id) => state.tasks.some((t) => t.tpl === id);
 
@@ -605,7 +621,8 @@ function taskRow(t, ds, opts = {}) {
   if (t.reminder != null && t.time) meta.push('<span>🔔</span>');
   if (t.notes) meta.push('<span>📝</span>');
   if (c) meta.push(`<span class="cat" style="--cc:${c.color}">${esc(c.name)}</span>`);
-  if (t.focusMin) meta.push(`<span>🎯 ${fmtDur(t.focusMin)}</span>`);
+  if (t.focusMin) meta.push(`<span>⏱ ${fmtDur(t.focusMin)} focus</span>`);
+  EXT.meta.forEach((f) => f(t, meta));
   return `<div class="task ${done ? 'done' : ''} ${opts.timeCol ? 'has-time' : ''} ${isEvent(t) ? 'is-event' : ''}" data-id="${t.id}" data-ds="${ds || ''}" style="--c:${c ? c.color : 'var(--muted)'}">
     ${opts.timeCol ? `<div class="timecol">${t.time || ''}</div>` : ''}
     <button class="check" data-act="toggle" aria-label="Bifează"></button>
@@ -625,7 +642,7 @@ function ring(pct, size = 76, stroke = 8, cls = '') {
 
 function viewToday() {
   const t = todayStr();
-  const list = tasksOn(t);
+  const list = tasksOn(t).filter((x) => !x.delegatedTo);
   const doneN = list.filter((x) => isDone(x, t)).length;
   const pct = list.length ? doneN / list.length : 0;
   const od = overdue();
@@ -671,8 +688,9 @@ function viewToday() {
   const ns = nudges().slice(0, 2);
   const plan = plannedMinutes(t);
   return `
-  <div class="hdr"><div><h1>Azi</h1><div class="sub">${fmtLong(t)}</div></div>
+  <div class="hdr"><div><h1>Azi</h1><div class="sub">${greeting()} · ${fmtLong(t)}</div></div>
     <div class="hbtns"><button data-act="tab" data-tab="focus" aria-label="Focus">⏱</button><button data-act="plan-day" class="primary">✨ Planifică</button></div></div>
+  ${EXT.todayTop.map((f) => f()).join('')}
   ${ns.length ? `<div class="nudges">${ns.map(nudgeCard).join('')}</div>` : ''}
   <div class="card progress">
     <div class="ring">${ring(pct)}<b>${Math.round(pct * 100)}%</b></div>
@@ -864,7 +882,7 @@ function viewFocus() {
   <div class="help" style="padding:12px 4px">Cronometrul merge corect și dacă ieși din aplicație, dar sunetul de final se aude doar cu ea deschisă.</div>`;
 }
 
-function viewMore() {
+function viewStats() {
   const days = last7();
   const counts = days.map(completionsOn);
   const max = Math.max(1, ...counts);
@@ -877,8 +895,7 @@ function viewMore() {
   const notifState = !('Notification' in window) ? 'indisponibil' : Notification.permission === 'granted' && S.notify ? 'pornite' : Notification.permission === 'denied' ? 'blocate' : 'oprite';
   const standalone = window.navigator.standalone || matchMedia('(display-mode: standalone)').matches;
   const remOpts = [[null, 'Fără'], [0, 'La ora începerii'], [5, '5 min înainte'], [10, '10 min înainte'], [15, '15 min înainte'], [30, '30 min înainte'], [60, '1 oră înainte']];
-  return `<div class="hdr"><div><h1>Progres</h1><div class="sub">Ultimele 7 zile</div></div></div>
-  <div class="kpis">
+  return `<div class="kpis">
     <div class="kpi"><div class="v">🔥 ${streak()}</div><div class="l">zile la rând cu progres</div></div>
     <div class="kpi"><div class="v">${rate}%</div><div class="l">din ce ai planificat (${did}/${planned})</div></div>
     <div class="kpi"><div class="v">${counts.reduce((a, b) => a + b, 0)}</div><div class="l">lucruri bifate</div></div>
@@ -886,15 +903,24 @@ function viewMore() {
   </div>
   <div class="sec"><h2>Bifate pe zi</h2></div>
   <div class="card"><div class="bars">${days.map((d, i) => `<div class="b ${i === 6 ? 't' : ''}"><em>${counts[i] || ''}</em><i style="height:${(counts[i] / max) * 100}%"></i><span>${ZS[parseYmd(d).getDay()]}</span></div>`).join('')}</div></div>
-  ${byCat.length ? `<div class="sec"><h2>Pe categorii</h2></div><div class="card">${byCat.map((o) => `<div class="catbar"><div class="top"><span>${esc(o.c.name)}</span><b>${o.n}</b></div><div class="track"><i style="width:${(o.n / catMax) * 100}%;--c:${o.c.color}"></i></div></div>`).join('')}</div>` : ''}
+  ${byCat.length ? `<div class="sec"><h2>Pe categorii</h2></div><div class="card">${byCat.map((o) => `<div class="catbar"><div class="top"><span>${esc(o.c.name)}</span><b>${o.n}</b></div><div class="track"><i style="width:${(o.n / catMax) * 100}%;--c:${o.c.color}"></i></div></div>`).join('')}</div>` : ''}`;
+}
 
-  ${standalone ? '' : `<div class="sec"><h2>Instalează pe iPhone</h2></div>
+function viewSettings() {
+  const S = state.settings;
+  const notifState = !('Notification' in window) ? 'indisponibil' : Notification.permission === 'granted' && S.notify ? 'pornite' : Notification.permission === 'denied' ? 'blocate' : 'oprite';
+  const standalone = window.navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+  const remOpts = [[null, 'Fără'], [0, 'La ora începerii'], [5, '5 min înainte'], [10, '10 min înainte'], [15, '15 min înainte'], [30, '30 min înainte'], [60, '1 oră înainte']];
+  return `${standalone ? '' : `<div class="sec"><h2>Instalează pe iPhone</h2></div>
   <div class="card howto"><b>Ca să o ai ca aplicație pe ecranul principal:</b><ol>
     <li>Deschide pagina în <b>Safari</b></li><li>Apasă butonul <b>Partajează</b> (pătratul cu săgeată)</li>
     <li>Alege <b>„Adaugă pe ecranul principal”</b></li><li>Deschide <b>Ritm</b> de pe ecranul principal</li></ol></div>`}
 
   <div class="sec"><h2>Setări</h2></div>
   <div class="card">
+    <label class="row"><span>Numele tău</span><input id="s-name" value="${esc(S.name || '')}" placeholder="ex: Andrei"></label>
+    <label class="row"><span>Max. ore de muncă / săpt.</span><input id="s-maxwork" type="number" inputmode="numeric" min="10" max="100" value="${S.maxWork}"></label>
+    <label class="row"><span>Min. ore personale / săpt.</span><input id="s-minpers" type="number" inputmode="numeric" min="0" max="60" value="${S.minPersonal}"></label>
     <button class="row" data-act="notif"><span>🔔 Notificări în aplicație</span><span class="link">${notifState}</span></button>
     <label class="row"><span>Reminder implicit</span><select id="s-rem">${remOpts.map(([v, l]) => `<option value="${v}" ${S.reminder === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     <button class="row" data-act="ics-all"><span>📅 Trimite tot în Calendarul iPhone</span><span class="link">.ics</span></button>
@@ -916,15 +942,14 @@ function viewMore() {
     <button class="row" data-act="wipe"><span class="link danger">Șterge toate datele</span></button>
   </div>
   <div class="help">Datele stau doar pe telefonul tău. Fă din când în când o copie de siguranță (o poți pune în Fișiere / iCloud Drive).</div>
-  <div class="help" style="text-align:center;padding:24px 0 0">Ritm · v2.0</div>`;
+  <div class="help" style="text-align:center;padding:24px 0 0">Andrei OS · v3.0</div>`;
 }
 
 function render() {
   const v = $('#view');
-  const views = { azi: viewToday, cal: viewCal, asist: viewAssistant, list: viewListPage, focus: viewFocus, more: viewMore };
-  v.innerHTML = views[ui.tab]();
+  v.innerHTML = (VIEWS[ui.tab] || VIEWS.azi)();
   $$('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === ui.tab));
-  $('#fab').hidden = ui.tab === 'focus' || ui.tab === 'more';
+  $('#fab').hidden = ui.tab === 'focus' || ui.tab === 'eu';
   const badge = $('#asist-badge');
   if (badge) { const n = nudges().filter((x) => x.tone === 'warn').length; badge.textContent = n; badge.hidden = !n; }
 }
@@ -1005,7 +1030,8 @@ function editorHtml() {
     ${d.id && isEvent(d) && d.time ? `<div class="label">Legat de această întâlnire</div>
       <div class="card">${linkedHere.map((x) => taskRow(x, evDs)).join('') || '<div class="empty" style="padding:14px">Nimic încă.</div>'}</div>
       <div class="row-btns"><button class="btn" data-act="ev-prep">+ De pregătit înainte</button><button class="btn" data-act="ev-after">+ De făcut după</button></div>` : ''}
-    <div class="label">Prioritate</div>
+    ${EXT.editor.map((f) => f(d)).join('')}
+    <div class="label">Importanță</div>
     <div class="seg" id="f-prio">${[1, 2, 3].map((p) => `<button class="${d.priority === p ? 'on' : ''}" data-act="prio" data-v="${p}">${p === 3 ? '❗ ' : ''}${PRIO[p]}</button>`).join('')}</div>
     <div class="label">Categorie</div>
     <div class="chips" id="f-cats">
@@ -1042,6 +1068,7 @@ function syncDraft() {
   draft.reminder = r === 'null' ? null : +r;
   draft.repeat = $('#f-rep').value;
   if ($('#f-deadline')) draft.deadline = $('#f-deadline').value || null;
+  EXT.sync.forEach((f) => f(draft));
   if ($('#f-link')) {
     const v = $('#f-link').value;
     if (v) { const [type, id, ds] = v.split('|'); draft.link = { type, id, ds }; } else draft.link = null;
@@ -1089,7 +1116,7 @@ let quickBase, quickPreset;
 function openQuick(base, preset) {
   quickBase = base; quickPreset = preset || null;
   const ev = preset && preset.link ? findTask(preset.link.id) : null;
-  const title = ev ? `${preset.link.type === 'before' ? 'Pentru' : 'După'} ${esc(ev.title)}` : 'Adaugă rapid';
+  const title = preset && preset.title ? esc(preset.title) : ev ? `${preset.link.type === 'before' ? 'Pentru' : 'După'} ${esc(ev.title)}` : 'Adaugă rapid';
   openSheet(`<div class="sheet-head"><button class="link" data-act="close">Gata</button><b class="ellipsis">${title}</b><button class="link strong" data-act="q-add">Adaugă</button></div>
   <div class="sheet-body">
     <input id="q" class="big" placeholder="${ev ? (preset.link.type === 'before' ? 'ex: pregătesc slide-urile 1h' : 'ex: trimit oferta până vineri') : 'ex: mâine la 18 sală #sport'}" autocomplete="off" enterkeyhint="send">
@@ -1112,6 +1139,7 @@ function openQuick(base, preset) {
 }
 function quickParse(v) {
   const p = parseQuick(v, quickBase);
+  if (quickPreset && quickPreset.fields) { p.fields = quickPreset.fields; if (!p.cat && quickPreset.fields.cat) p.cat = quickPreset.fields.cat; }
   if (quickPreset && quickPreset.link && !p.link) {
     p.link = quickPreset.link; p.linkEv = findTask(quickPreset.link.id); p.kind = 'task';
     if (p.link.type === 'after' && p.date === quickBase) p.date = p.link.ds;
@@ -1126,6 +1154,9 @@ function previewChips(p) {
   else if (p.date && p.date <= todayStr() && p.kind !== 'event' && state.settings.autoPlan) chips.push('<span class="chip">✨ oră automată</span>');
   if (p.duration) chips.push(`<span class="chip">⏱ ${fmtDur(p.duration)}</span>`);
   if (p.deadline) chips.push(`<span class="chip">⏳ până ${relDay(p.deadline).toLowerCase()}</span>`);
+  if (p.delegatedTo) chips.push(`<span class="chip">👤 delegat: ${esc(p.delegatedTo)}</span>`);
+  if (p.fields && p.fields.goal) { const g = (state.goals || []).find((x) => x.id === p.fields.goal); if (g) chips.push(`<span class="chip">🎯 ${esc(g.title)}</span>`); }
+  if (p.fields && p.fields.project) { const pr = (state.projects || []).find((x) => x.id === p.fields.project); if (pr) chips.push(`<span class="chip">📁 ${esc(pr.title)}</span>`); }
   if (p.linkEv) chips.push(`<span class="chip">🔗 ${p.link.type === 'before' ? 'pentru' : 'după'} ${esc(p.linkEv.title)}</span>`);
   if (p.repeat !== 'none') chips.push(`<span class="chip">↻ ${p.repeat === 'days' ? p.days.map((d) => ZS[d]).join(', ') : REPEAT[p.repeat]}</span>`);
   if (p.priority === 3) chips.push('<span class="chip" style="color:var(--danger)">❗ Important</span>');
@@ -1141,6 +1172,8 @@ function quickToTask(p) {
     ...baseTask(), title: p.title, date: p.date, time: p.time || '', duration: p.duration || (p.kind === 'event' ? 60 : 0),
     priority: p.priority, cat: p.cat, repeat: p.repeat, days: p.days, kind: p.kind, deadline: p.deadline, link: p.link,
     reminder: p.kind === 'event' ? Math.max(15, state.settings.reminder || 0) : state.settings.reminder,
+    ...(p.delegatedTo ? { delegatedTo: p.delegatedTo, followUp: p.deadline || addDays(todayStr(), 2) } : {}),
+    ...(p.fields || {}), cat: p.cat,
   };
 }
 function quickAdd() {
@@ -1583,6 +1616,7 @@ document.addEventListener('input', (e) => {
   if (e.target.id === 'search') { ui.search = e.target.value; $('#listbody').innerHTML = viewList(); }
 });
 const SETTING_INPUTS = {
+  's-name': (v) => ({ name: v.trim() }), 's-maxwork': (v) => ({ maxWork: Math.max(10, +v || 50) }), 's-minpers': (v) => ({ minPersonal: Math.max(0, +v || 0) }),
   's-morning': (v) => ({ morning: v || '08:00' }), 's-evening': (v) => ({ evening: v || '21:00' }),
   's-start': (v) => ({ dayStart: v || '08:00' }), 's-end': (v) => ({ dayEnd: v || '22:00' }),
   's-buffer': (v) => ({ buffer: +v }), 's-defdur': (v) => ({ defaultDur: +v }), 's-prep': (v) => ({ prepLead: +v }),
@@ -1608,7 +1642,7 @@ document.addEventListener('change', (e) => {
         const s = JSON.parse(r.result);
         if (!Array.isArray(s.tasks)) throw new Error('format');
         if (!confirm(`Restaurezi copia cu ${s.tasks.length} taskuri? Datele actuale vor fi înlocuite.`)) return;
-        state = hydrate(s);
+        state = hydrate(s); runMigrations();
         save(); render(); toast('Copie restaurată ✓');
       } catch (err) { toast('Fișier invalid'); }
     };
@@ -1654,9 +1688,13 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
-onNewDayOrOpen();
-render();
-tick();
-checkReminders();
-updateBadge();
-setTimeout(schedulePushes, 1500);
+const VIEWS = { azi: viewToday, cal: viewCal, asist: viewAssistant, list: viewListPage, focus: viewFocus };
+function boot() {
+  runMigrations();
+  onNewDayOrOpen();
+  render();
+  tick();
+  checkReminders();
+  updateBadge();
+  setTimeout(schedulePushes, 1500);
+}

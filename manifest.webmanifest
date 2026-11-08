@@ -1,7 +1,7 @@
 {
-  "name": "Ritm – taskuri & calendar",
-  "short_name": "Ritm",
-  "description": "Calendar și taskuri făcute ca să termini ce ți-ai propus.",
+  "name": "Andrei OS",
+  "short_name": "Andrei OS",
+  "description": "Centrul de comandă personal: program, obiective, proiecte, echipă, corp și minte.",
   "lang": "ro",
   "start_url": "./",
   "scope": "./",
