@@ -4,6 +4,15 @@ Aplicație de planificare (ca Google Calendar, dar orientată pe **terminarea ta
 E o aplicație web instalabilă (PWA): merge pe iPhone ca o aplicație normală, pe tot ecranul, și funcționează offline.
 Datele stau doar pe telefonul tău.
 
+## Asistentul (v2)
+- **Îți face programul singur** – taskurile fără oră sunt puse automat în golurile dintre întâlniri, după prioritate și termen. Ce n-ai apucat se mută singur mai încolo.
+- **Înțelege legăturile cu întâlnirile** – `termin raportul pentru ședință` = trebuie gata *înainte*; `după ședință trimit rezumatul` = îl pune imediat *după*. Primești „Nu uita: ai de terminat X” înainte de ședință.
+- **După fiecare întâlnire** te întreabă ce urmează (sau adaugă automat „ce urmează după”).
+- **Remindere push reale** (și cu aplicația închisă) prin aplicația gratuită ntfy: planul zilei dimineața, reminder înainte de fiecare lucru, „nu uita” înainte de ședințe, recapitularea de seară.
+- **Observații** – restanțe, zi supraîncărcată, termene apropiate, lucruri amânate de prea multe ori, idei uitate în „Cândva”.
+- **Descarcă-ți mintea** – scrii tot ce ai în cap, câte un lucru pe rând, și le organizează el.
+- **Idei de rutine** gata făcute (plan pentru mâine, email la ore fixe, recapitulare săptămânală, sport, facturi etc.).
+
 ## Ce face
 - **Azi** – progresul zilei, „Următorul pas” (ce ai de făcut *acum*), programul pe ore cu linia orei curente, restanțe pe care le muți pe azi dintr-o atingere.
 - **Adăugare rapidă în limbaj natural** – scrii `mâine la 18 sală #sport 45min !` și aplicația înțelege singură data, ora, durata, categoria și prioritatea.

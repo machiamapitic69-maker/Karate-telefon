@@ -1,7 +1,10 @@
 'use strict';
-/* Ritm – calendar + taskuri, totul local pe telefon (localStorage). */
+/* Ritm – asistent personal: calendar + taskuri + planificare automată + remindere.
+   Totul e salvat local pe telefon (localStorage). */
 
-// ---------- utilitare ----------
+// ============================================================
+// Utilitare
+// ============================================================
 const KEY = 'ritm.v1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -15,8 +18,11 @@ const todayStr = () => ymd(new Date());
 const nowMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
 const tMin = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
 const minToT = (m) => `${pad(Math.floor(m / 60) % 24)}:${pad(m % 60)}`;
-const norm = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const norm = (s) => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const fmtDur = (m) => (m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ' ' + (m % 60) + 'm' : ''}` : `${m} min`);
+const tsOf = (ds, min) => { const d = parseYmd(ds); d.setHours(0, min, 0, 0); return d.getTime(); };
+const daysBetween = (a, b) => Math.round((parseYmd(b) - parseYmd(a)) / 86400000);
+const q = (s) => `„${s}”`;
 
 const ZILE = ['Duminică', 'Luni', 'Marți', 'Miercuri', 'Joi', 'Vineri', 'Sâmbătă'];
 const ZS = ['Dum', 'Lun', 'Mar', 'Mie', 'Joi', 'Vin', 'Sâm'];
@@ -28,12 +34,15 @@ const relDay = (ds) => {
   if (ds === addDays(t, 1)) return 'Mâine';
   if (ds === addDays(t, -1)) return 'Ieri';
   const d = parseYmd(ds);
+  if (ds > t && ds <= addDays(t, 6)) return ZILE[d.getDay()];
   return `${ZS[d.getDay()]}, ${d.getDate()} ${LUNI[d.getMonth()].slice(0, 3)}`;
 };
-const REPEAT = { none: 'Niciodată', daily: 'Zilnic', weekdays: 'Zile lucrătoare', weekly: 'Săptămânal', monthly: 'Lunar' };
+const REPEAT = { none: 'Niciodată', daily: 'Zilnic', weekdays: 'Zile lucrătoare', days: 'Anumite zile', weekly: 'Săptămânal', monthly: 'Lunar' };
 const PRIO = { 1: 'Scăzută', 2: 'Normală', 3: 'Importantă' };
 
-// ---------- date / stare ----------
+// ============================================================
+// Stare
+// ============================================================
 const DEFAULT_CATS = [
   { id: 'munca', name: 'Muncă', color: '#4f7cff' },
   { id: 'personal', name: 'Personal', color: '#a259ff' },
@@ -42,46 +51,68 @@ const DEFAULT_CATS = [
   { id: 'casa', name: 'Casă', color: '#f5b700' },
   { id: 'studiu', name: 'Studiu', color: '#06b6d4' },
 ];
-const DEFAULT_SETTINGS = { reminder: 10, work: 25, brk: 5, notify: false, dayHours: 8 };
+const DEFAULT_SETTINGS = {
+  reminder: 10, work: 25, brk: 5, notify: false, dayHours: 8,
+  dayStart: '08:00', dayEnd: '22:00', buffer: 10, defaultDur: 30,
+  autoPlan: true, autoFollow: true, prepLead: 60,
+  morning: '08:00', evening: '21:00',
+  ntfyOn: false, ntfyTopic: '', ntfyServer: 'https://ntfy.sh',
+};
+const baseTask = () => ({
+  id: uid(), title: '', notes: '', date: todayStr(), time: '', duration: 0, priority: 2, cat: null,
+  kind: 'task', repeat: 'none', days: [], reminder: null, deadline: null, link: null, auto: false,
+  postponed: 0, subtasks: [], done: false, doneDates: [], createdAt: Date.now(),
+});
+const subs = (arr) => arr.map((t) => ({ t, done: false }));
 
 function seed() {
-  const t = todayStr();
-  const base = { notes: '', duration: 0, priority: 2, cat: null, repeat: 'none', reminder: null, subtasks: [], done: false, doneDates: [], createdAt: Date.now() };
   return {
     tasks: [
-      { ...base, id: uid(), title: 'Bun venit în Ritm 👋 Atinge cercul ca să bifezi', date: t },
-      { ...base, id: uid(), title: 'Apasă + și scrie: „mâine la 18 sală #sport”', date: t, priority: 3, cat: 'personal' },
-      { ...base, id: uid(), title: 'Planifică ziua de mâine (2 minute)', date: t, time: '21:30', duration: 10, repeat: 'daily', reminder: 0, cat: 'personal',
-        subtasks: [{ t: 'Mută ce n-am terminat azi', done: false }, { t: 'Alege cele 3 lucruri importante', done: false }, { t: 'Pune-le o oră', done: false }] },
+      { ...baseTask(), title: 'Bun venit în Ritm 👋 Atinge cercul ca să bifezi', duration: 5 },
+      { ...baseTask(), title: 'Deschide tab-ul ✨ Asistent și apasă „Planifică-mi ziua”', priority: 3, cat: 'personal', duration: 5 },
+      { ...baseTask(), title: 'Planifică ziua de mâine', time: '21:30', duration: 10, repeat: 'daily', reminder: 0, cat: 'personal', tpl: 'evening',
+        subtasks: subs(['Bifează ce ai terminat', 'Mută restul pe mâine', 'Alege cele 3 lucruri importante']) },
     ],
     cats: DEFAULT_CATS.map((c) => ({ ...c })),
-    focusLog: {},
-    settings: { ...DEFAULT_SETTINGS },
-    timer: null,
-    sent: {},
+    focusLog: {}, settings: { ...DEFAULT_SETTINGS }, timer: null, sent: {}, pushed: {}, dismissed: {}, lastAutoPlan: null,
   };
+}
+function hydrate(s) {
+  const st = {
+    cats: DEFAULT_CATS.map((c) => ({ ...c })), focusLog: {}, timer: null, sent: {}, pushed: {}, dismissed: {}, lastAutoPlan: null,
+    ...s, settings: { ...DEFAULT_SETTINGS, ...(s.settings || {}) },
+  };
+  st.tasks = st.tasks.map((t) => ({ ...baseTask(), ...t }));
+  return st;
 }
 function load() {
   try {
     const s = JSON.parse(localStorage.getItem(KEY));
-    if (s && Array.isArray(s.tasks)) {
-      return { cats: DEFAULT_CATS.map((c) => ({ ...c })), focusLog: {}, timer: null, sent: {}, ...s, settings: { ...DEFAULT_SETTINGS, ...(s.settings || {}) } };
-    }
+    if (s && Array.isArray(s.tasks)) return hydrate(s);
   } catch (e) { /* stocare indisponibilă */ }
   return seed();
 }
 let state = load();
+let pushTimer;
+function persist() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignorăm */ } }
 function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignorăm */ }
+  persist();
   updateBadge();
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(schedulePushes, 2500);
 }
 
 const ui = { tab: 'azi', calMonth: todayStr().slice(0, 8) + '01', calSel: todayStr(), listMode: 'plan', search: '' };
 
-// ---------- logica taskurilor ----------
+// ============================================================
+// Logica taskurilor
+// ============================================================
 const isRec = (t) => t.repeat && t.repeat !== 'none';
+const isEvent = (t) => t.kind === 'event';
 const cat = (id) => state.cats.find((c) => c.id === id);
 const findTask = (id) => state.tasks.find((t) => t.id === id);
+const durOf = (t) => t.duration || (isEvent(t) ? 60 : state.settings.defaultDur);
+const endMin = (t) => tMin(t.time) + durOf(t);
 
 function occursOn(t, ds) {
   if (!t.date || ds < t.date) return false;
@@ -90,6 +121,7 @@ function occursOn(t, ds) {
   switch (t.repeat) {
     case 'daily': return true;
     case 'weekdays': return d.getDay() > 0 && d.getDay() < 6;
+    case 'days': return (t.days || []).includes(d.getDay());
     case 'weekly': return d.getDay() === s.getDay();
     case 'monthly': return d.getDate() === s.getDate();
   }
@@ -129,52 +161,111 @@ function streak() {
   while (completionsOn(d) > 0) { n++; d = addDays(d, -1); }
   return n;
 }
-function plannedMinutes(ds) { return tasksOn(ds).reduce((s, t) => s + (t.duration || 0), 0); }
+const plannedMinutes = (ds) => tasksOn(ds).reduce((s, t) => s + (t.time || t.duration ? durOf(t) : 0), 0);
 
-// ---------- parser pentru adăugare rapidă ----------
+// legături între taskuri și întâlniri („pentru ședință”, „după întâlnire”)
+const linkEvent = (t) => (t.link ? findTask(t.link.id) : null);
+const linkedTo = (ev, ds, type) => state.tasks.filter((t) => t.link && t.link.id === ev.id && t.link.ds === ds && t.link.type === type);
+function linkLabel(t) {
+  const ev = linkEvent(t);
+  if (!ev) return '';
+  return `${t.link.type === 'before' ? 'pentru' : 'după'} ${ev.title}${ev.time ? ' ' + ev.time : ''}${t.link.ds !== todayStr() ? ' (' + relDay(t.link.ds).toLowerCase() + ')' : ''}`;
+}
+function moveTo(t, ds, countPostpone = true) {
+  if (isRec(t)) return;
+  if (countPostpone && t.date && ds > t.date) t.postponed = (t.postponed || 0) + 1;
+  t.date = ds;
+  if (t.auto) t.time = '';
+}
+
+// ============================================================
+// Parser pentru adăugare rapidă (limbaj natural, română)
+// ============================================================
 const WD = { duminica: 0, luni: 1, marti: 2, miercuri: 3, joi: 4, vineri: 5, sambata: 6 };
+const WD_A = { lunea: 1, martea: 2, miercurea: 3, joia: 4, vinerea: 5, duminicile: 0, sambetele: 6 };
+const EVENT_WORDS = ['intalnir', 'sedint', 'meeting', 'call', 'apel', 'programar', 'interviu', 'doctor', 'dentist', 'medic', 'consult', 'curs', 'conferint', 'zbor', 'tren', 'nunta', 'petrecer', 'botez', 'eveniment', 'webinar', 'cina cu', 'pranz cu'];
+function dateWord(n) {
+  const t0 = todayStr();
+  if (n === 'azi' || n === 'astazi' || n === 'diseara') return t0;
+  if (n === 'maine') return addDays(t0, 1);
+  if (n === 'poimaine') return addDays(t0, 2);
+  if (n in WD) { const cur = new Date().getDay(); return addDays(t0, (WD[n] - cur + 7) % 7 || 7); }
+  const m = n.match(/^(\d{1,2})[./](\d{1,2})$/);
+  if (m && +m[2] >= 1 && +m[2] <= 12 && +m[1] >= 1 && +m[1] <= 31) {
+    const y = new Date().getFullYear();
+    let ds = `${y}-${pad(+m[2])}-${pad(+m[1])}`;
+    if (ds < t0) ds = `${y + 1}-${pad(+m[2])}-${pad(+m[1])}`;
+    return ds;
+  }
+  return undefined;
+}
+const stemOf = (word) => norm(word).replace(/[^a-z0-9]/g, '').slice(0, 5);
+function findEventByWord(word, type) {
+  const stem = stemOf(word);
+  if (stem.length < 3) return null;
+  const t = todayStr(), nm = nowMin();
+  const found = [];
+  for (let i = 0; i < 14; i++) {
+    const ds = addDays(t, i);
+    for (const e of tasksOn(ds)) if (isEvent(e) && norm(e.title).replace(/[^a-z0-9 ]/g, '').split(' ').some((w) => w.startsWith(stem))) found.push({ e, ds });
+  }
+  if (!found.length) return null;
+  if (type === 'before') return found.find(({ e, ds }) => ds > t || !e.time || tMin(e.time) > nm) || found[0];
+  return found.find(({ ds }) => ds === t) || found[0];
+}
+
 function parseQuick(text, baseDate) {
-  const res = { date: baseDate === undefined ? todayStr() : baseDate, time: null, priority: 2, cat: null, repeat: 'none', duration: null, title: '' };
+  const res = { date: baseDate === undefined ? todayStr() : baseDate, time: null, priority: 2, cat: null, repeat: 'none', days: [], duration: null, title: '', kind: 'task', deadline: null, link: null, linkEv: null };
   const toks = text.trim().split(/\s+/).filter(Boolean);
   const keep = [];
   const timeRe = /^(\d{1,2})(?:[:.](\d{2}))?$/;
   const t0 = todayStr();
+  let dateSet = false;
   for (let i = 0; i < toks.length; i++) {
     const raw = toks[i], n = norm(raw).replace(/[,;]$/, '');
-    const next = toks[i + 1] ? norm(toks[i + 1]) : '';
-    if (n === 'azi' || n === 'astazi') { res.date = t0; continue; }
-    if (n === 'maine') { res.date = addDays(t0, 1); continue; }
-    if (n === 'poimaine') { res.date = addDays(t0, 2); continue; }
-    if (n === 'candva') { res.date = null; continue; }
-    if (n in WD) { const cur = new Date().getDay(); res.date = addDays(t0, (WD[n] - cur + 7) % 7 || 7); continue; }
+    const next = toks[i + 1] ? norm(toks[i + 1]).replace(/[,;]$/, '') : '';
+    const next2 = toks[i + 2] ? norm(toks[i + 2]).replace(/[,;]$/, '') : '';
+    let m, d;
+    // termen limită: „până vineri”
+    if ((n === 'pana' || n === 'termen') && (d = dateWord(next)) !== undefined) { res.deadline = d; i++; continue; }
+    // legătură cu o întâlnire: „pentru ședință”, „înainte de ședință”, „după întâlnire”
+    if (n === 'pentru' || n === 'inainte' || n === 'dupa') {
+      const type = n === 'dupa' ? 'after' : 'before';
+      let j = i + 1;
+      if (n === 'inainte' && next === 'de') j++;
+      const w = toks[j] ? norm(toks[j]) : '';
+      const hit = w && findEventByWord(w, type);
+      if (hit) { res.link = { id: hit.e.id, ds: hit.ds, type }; res.linkEv = hit.e; i = j; continue; }
+    }
+    if ((d = dateWord(n)) !== undefined && !(n.includes('.') && toks[i - 1] && /^(la|ora)$/.test(norm(toks[i - 1])))) { res.date = d; dateSet = true; continue; }
+    if (n === 'candva') { res.date = null; dateSet = true; continue; }
     if (n === 'zilnic') { res.repeat = 'daily'; continue; }
     if (n === 'saptamanal') { res.repeat = 'weekly'; continue; }
-    if (n === 'in' && next === 'fiecare' && toks[i + 2] && norm(toks[i + 2]) === 'luna') { res.repeat = 'monthly'; i += 2; continue; }
-    if (n === 'in' && next === 'fiecare' && toks[i + 2] && norm(toks[i + 2]) === 'zi') { res.repeat = 'daily'; i += 2; continue; }
-    if (n === 'in' && next === 'zilele' && toks[i + 2] && norm(toks[i + 2]).startsWith('lucratoare')) { res.repeat = 'weekdays'; i += 2; continue; }
+    if (n in WD_A) { res.repeat = 'days'; res.days.push(WD_A[n]); continue; }
+    if (n === 'si' && res.repeat === 'days' && next in WD_A) continue;
+    if (n === 'in' && next === 'fiecare') {
+      if (next2 === 'zi') { res.repeat = 'daily'; i += 2; continue; }
+      if (next2 === 'luna') { res.repeat = 'monthly'; i += 2; continue; }
+      if (next2 === 'saptamana') { res.repeat = 'weekly'; i += 2; continue; }
+      if (next2 in WD) { res.repeat = 'days'; res.days.push(WD[next2]); i += 2; continue; }
+    }
+    if (n === 'in' && next === 'zilele' && next2.startsWith('lucratoare')) { res.repeat = 'weekdays'; i += 2; continue; }
     if (n === 'lucratoare' || n === 'l-v') { res.repeat = 'weekdays'; continue; }
     if (/^!+\d?$/.test(n)) { res.priority = n === '!3' ? 1 : 3; continue; }
+    if (n === 'urgent' || n === 'important') { res.priority = 3; keep.push(raw); continue; }
     if (n.startsWith('#') && n.length > 1) {
-      const q = n.slice(1);
-      const c = state.cats.find((c) => norm(c.name).startsWith(q));
+      const c = state.cats.find((c) => norm(c.name).startsWith(n.slice(1)));
       if (c) { res.cat = c.id; continue; }
     }
-    let m;
     if ((m = n.match(/^(\d+)(min|m)$/))) { res.duration = +m[1]; continue; }
     if ((m = n.match(/^(\d+(?:[.,]5)?)(h|ore)$/))) { res.duration = Math.round(parseFloat(m[1].replace(',', '.')) * 60); continue; }
     if (/^\d+$/.test(n) && /^(min|minute)$/.test(next)) { res.duration = +n; i++; continue; }
-    if ((m = n.match(/^(\d{1,2})[./](\d{1,2})$/)) && +m[2] <= 12 && +m[1] <= 31 && !(toks[i - 1] && /^(la|ora)$/.test(norm(toks[i - 1])))) {
-      const y = new Date().getFullYear();
-      let ds = `${y}-${pad(+m[2])}-${pad(+m[1])}`;
-      if (ds < t0) ds = `${y + 1}-${pad(+m[2])}-${pad(+m[1])}`;
-      res.date = ds; continue;
-    }
+    if (/^\d+$/.test(n) && /^(ora|ore)$/.test(next) && norm(toks[i - 1] || '') !== 'la') { res.duration = +n * 60; i++; continue; }
     if ((n === 'la' || n === 'ora') && (m = next.match(timeRe)) && +m[1] < 24) {
       let h = +m[1]; const mm = m[2] ? +m[2] : 0;
       i++;
-      const after = toks[i + 1] ? norm(toks[i + 1]) : '';
-      if (/^(seara|pm|dupa-amiaza)$/.test(after) && h < 12) { h += 12; i++; }
-      else if (/^(dimineata|am)$/.test(after)) { i++; }
+      if (/^(seara|pm|dupa-amiaza)$/.test(next2) && h < 12) { h += 12; i++; }
+      else if (/^(dimineata|am)$/.test(next2)) { i++; }
       else if (!m[2] && h >= 1 && h <= 6) h += 12; // „la 5” => 17:00
       res.time = `${pad(h)}:${pad(mm)}`; continue;
     }
@@ -182,30 +273,342 @@ function parseQuick(text, baseDate) {
     keep.push(raw);
   }
   res.title = keep.join(' ').trim();
+  res.title = res.title.charAt(0).toUpperCase() + res.title.slice(1);
+  const nt = ' ' + norm(res.title) + ' ';
+  if (!res.link && EVENT_WORDS.some((w) => nt.includes(' ' + w))) res.kind = 'event';
+  if (res.link && res.link.type === 'after' && !dateSet) res.date = res.link.ds;
+  if (res.link && res.link.type === 'before' && !dateSet && res.link.ds < (res.date || t0)) res.date = res.link.ds;
+  if (res.deadline && !dateSet) res.date = t0;
   if (res.repeat !== 'none' && !res.date) res.date = t0;
+  if (res.repeat === 'days' && !res.days.length) res.repeat = 'none';
   return res;
 }
 
-// ---------- randare ----------
+// ============================================================
+// Planificator automat
+// ============================================================
+function planDay(ds) {
+  const S = state.settings;
+  const isToday = ds === todayStr();
+  const dayStart = tMin(S.dayStart), dayEnd = tMin(S.dayEnd);
+  const start = isToday ? Math.max(dayStart, Math.ceil((nowMin() + 5) / 5) * 5) : dayStart;
+  const buf = +S.buffer || 0;
+  const busy = [];
+  const cands = [];
+  for (const t of tasksOn(ds)) {
+    const done = isDone(t, ds);
+    if (t.time && (isEvent(t) || !t.auto || done)) { busy.push([tMin(t.time), endMin(t)]); continue; }
+    if (done || isEvent(t)) continue;
+    cands.push(t);
+  }
+  if (isToday) for (const t of overdue()) if (!isEvent(t) && !cands.includes(t)) cands.push(t);
+  const info = cands.map((t) => {
+    let earliest = start, latest = dayEnd;
+    const ev = linkEvent(t);
+    if (ev && t.link.ds === ds && ev.time) {
+      if (t.link.type === 'after') earliest = Math.max(earliest, endMin(ev) + buf);
+      else latest = Math.min(latest, tMin(ev.time) - buf);
+    }
+    const dl = t.deadline || (ev && t.link.type === 'before' ? t.link.ds : null) || '9999';
+    return { t, earliest, latest, dur: durOf(t), dl };
+  });
+  info.sort((a, b) => (a.latest - b.latest) || a.dl.localeCompare(b.dl) || (b.t.priority - a.t.priority) || (a.t.date || '').localeCompare(b.t.date || '') || (a.dur - b.dur));
+  const placed = [], overflow = [];
+  for (const it of info) {
+    busy.sort((a, b) => a[0] - b[0]);
+    let s = Math.ceil(it.earliest / 5) * 5;
+    for (const [b0, b1] of busy) {
+      if (s + it.dur + buf <= b0) break;
+      if (s < b1 + buf) s = Math.ceil((b1 + buf) / 5) * 5;
+    }
+    if (s + it.dur <= it.latest) {
+      busy.push([s, s + it.dur]);
+      placed.push({ t: it.t, time: minToT(s), dur: it.dur });
+    } else overflow.push(it.t);
+  }
+  placed.sort((a, b) => a.time.localeCompare(b.time));
+  return { ds, placed, overflow };
+}
+function applyPlan(plan, moveOverflow) {
+  for (const p of plan.placed) {
+    if (!isRec(p.t)) p.t.date = plan.ds;
+    p.t.time = p.time;
+    p.t.auto = true;
+    if (!p.t.duration) p.t.duration = p.dur;
+    if (p.t.reminder == null) p.t.reminder = state.settings.reminder;
+  }
+  if (moveOverflow) for (const t of plan.overflow) moveTo(t, addDays(plan.ds, 1));
+  save();
+}
+function autoPlanToday(silent) {
+  if (!state.settings.autoPlan) return null;
+  const plan = planDay(todayStr());
+  const changed = plan.placed.filter((p) => p.t.time !== p.time || p.t.date !== plan.ds);
+  if (changed.length) applyPlan({ ...plan, placed: changed }, false);
+  state.lastAutoPlan = todayStr();
+  persist();
+  if (!silent && changed.length === 1) toast(`✨ Am pus ${q(changed[0].t.title)} la ${changed[0].time}`);
+  else if (!silent && changed.length > 1) toast(`✨ Am reorganizat programul (${changed.length} taskuri)`);
+  return plan;
+}
+
+// ============================================================
+// Asistentul: observații și sugestii
+// ============================================================
+function nudges() {
+  const S = state.settings;
+  const t = todayStr(), nm = nowMin(), out = [];
+  const today = tasksOn(t);
+  const open = today.filter((x) => !isDone(x, t));
+  const add = (n) => { if (!state.dismissed[n.key]) out.push(n); };
+
+  // 1. Pregătire pentru întâlniri care urmează
+  for (const ds of [t, addDays(t, 1)]) {
+    for (const ev of tasksOn(ds)) {
+      if (!isEvent(ev) || !ev.time) continue;
+      const mins = daysBetween(t, ds) * 1440 + tMin(ev.time) - nm;
+      if (mins < -5 || mins > 26 * 60) continue;
+      const prep = linkedTo(ev, ds, 'before').filter((x) => !isDone(x, ds));
+      if (!prep.length) continue;
+      add({
+        key: `prep|${ev.id}|${ds}`, icon: '📌', tone: mins < 180 ? 'warn' : '', id: prep[0].id, ds,
+        title: `Nu uita: ${prep.map((x) => q(esc(x.title))).join(', ')}`,
+        body: `Trebuie gata pentru ${q(esc(ev.title))} – ${relDay(ds).toLowerCase()} la ${ev.time}${mins < 180 ? ` (în ${mins >= 60 ? fmtDur(mins) : mins + ' min'})` : ''}.`,
+        actions: [{ act: 'focus-on', label: '▶ Lucrez acum' }, { act: 'toggle', label: '✓ E gata' }],
+      });
+    }
+  }
+  // 2. După întâlniri: follow-up
+  for (const ev of today) {
+    if (!isEvent(ev) || !ev.time) continue;
+    const end = endMin(ev);
+    if (nm < end || nm > end + 240) continue;
+    const after = linkedTo(ev, t, 'after');
+    const openAfter = after.filter((x) => !isDone(x, t));
+    if (openAfter.length) {
+      add({ key: `after|${ev.id}|${t}`, icon: '➡️', id: openAfter[0].id, ds: t, tone: 'warn',
+        title: `S-a terminat ${q(esc(ev.title))}`, body: `Acum ai de făcut: ${openAfter.map((x) => q(esc(x.title))).join(', ')}.`,
+        actions: [{ act: 'focus-on', label: '▶ Încep' }, { act: 'toggle', label: '✓ Gata' }] });
+    } else if (!after.length) {
+      add({ key: `follow|${ev.id}|${t}`, icon: '💬', id: ev.id, ds: t,
+        title: `Cum a fost ${q(esc(ev.title))}?`, body: 'Ai ceva de făcut după? Notează acum, cât e proaspăt, ca să nu uiți.',
+        actions: [{ act: 'followup', label: '+ Adaugă ce urmează' }, { act: 'dismiss', v: `follow|${ev.id}|${t}`, label: 'Nimic' }] });
+    }
+  }
+  // 3. Termene care se apropie
+  for (const x of state.tasks) {
+    if (!x.deadline || x.done || isRec(x)) continue;
+    const dd = daysBetween(t, x.deadline);
+    if (dd > 2) continue;
+    add({ key: `dl|${x.id}|${t}`, icon: '⏳', tone: dd <= 0 ? 'warn' : '', id: x.id, ds: x.date || '',
+      title: dd < 0 ? `Termen depășit: ${q(esc(x.title))}` : dd === 0 ? `Termen azi: ${q(esc(x.title))}` : `Termen ${relDay(x.deadline).toLowerCase()}: ${q(esc(x.title))}`,
+      body: x.subtasks.length ? `Mai ai ${x.subtasks.filter((s) => !s.done).length} pași din ${x.subtasks.length}.` : 'Rezervă-ți timp pentru el azi.',
+      actions: [{ act: 'focus-on', label: '▶ Lucrez acum' }, { act: 'edit', label: 'Detalii' }] });
+  }
+  // 4. Restanțe
+  const od = overdue();
+  if (od.length) add({ key: `od|${t}|${od.length}`, icon: '🕓', title: `Ai ${od.length === 1 ? 'o restanță' : od.length + ' restanțe'}`,
+    body: od.slice(0, 3).map((x) => q(esc(x.title))).join(', ') + (od.length > 3 ? '…' : ''),
+    actions: [{ act: 'move-all-today', label: 'Mută pe azi' }, { act: 'plan-day', label: '✨ Mută și planifică' }] });
+  // 5. Zi supraîncărcată
+  const freeLeft = Math.max(0, tMin(S.dayEnd) - Math.max(nm, tMin(S.dayStart)));
+  const need = open.filter((x) => !x.time || tMin(x.time) >= nm).reduce((s, x) => s + durOf(x), 0);
+  if (open.length > 2 && need > freeLeft + 15 && nm < tMin(S.dayEnd)) add({ key: `over|${t}`, icon: '⚖️', tone: 'warn',
+    title: 'Ai mai mult decât încape azi', body: `Ai nevoie de ~${fmtDur(need)}, dar mai ai ${fmtDur(freeLeft)} până la ${S.dayEnd}. Mut pe mâine ce e mai puțin important?`,
+    actions: [{ act: 'move-low', label: 'Mută prioritățile mici' }, { act: 'plan-day', label: '✨ Vezi planul' }] });
+  // 6. Taskuri fără oră (când planificarea automată e oprită)
+  const untimed = open.filter((x) => !x.time && !isEvent(x));
+  if (!S.autoPlan && untimed.length >= 2) add({ key: `untimed|${t}|${untimed.length}`, icon: '🧩', title: `${untimed.length} taskuri n-au oră`,
+    body: 'Le pun eu în golurile din program?', actions: [{ act: 'plan-day', label: '✨ Planifică-mi ziua' }] });
+  // 7. Amânat de prea multe ori
+  for (const x of state.tasks) {
+    if (x.done || isRec(x) || (x.postponed || 0) < 3) continue;
+    add({ key: `post|${x.id}|${x.postponed}`, icon: '🔁', id: x.id, ds: x.date || '',
+      title: `Ai amânat ${q(esc(x.title))} de ${x.postponed} ori`, body: 'Poate e prea mare. Împarte-l în pași mici sau hotărăște dacă mai contează.',
+      actions: [{ act: 'edit', label: 'Împarte în pași' }, { act: 'del-task', v: x.id, label: 'Renunț la el' }] });
+  }
+  // 8. Idei vechi din „Cândva”
+  const stale = state.tasks.filter((x) => !x.date && !x.done && Date.now() - (x.createdAt || 0) > 10 * 86400000);
+  if (stale.length) {
+    const x = stale[0];
+    add({ key: `stale|${x.id}|${t.slice(0, 7)}`, icon: '💡', id: x.id, ds: '',
+      title: `${q(esc(x.title))} așteaptă de ${Math.floor((Date.now() - x.createdAt) / 86400000)} zile`, body: 'Îl planificăm sau renunți la el?',
+      actions: [{ act: 'move-today', label: 'Azi' }, { act: 'move-tomorrow', v: x.id, label: 'Mâine' }, { act: 'del-task', v: x.id, label: 'Șterge' }] });
+  }
+  // 9. Seara: recapitulare + mâine
+  if (nm >= tMin(S.evening)) {
+    const left = open.filter((x) => !isRec(x) && !isEvent(x));
+    if (left.length) add({ key: `eve|${t}`, icon: '🌙', title: `Recapitulare: ai bifat ${today.length - open.length} din ${today.length}`,
+      body: `Ce n-ai terminat (${left.length}) mut pe mâine, ca să nu se piardă?`, actions: [{ act: 'eve-move', label: 'Mută pe mâine' }] });
+    if (!tasksOn(addDays(t, 1)).filter((x) => !isRec(x)).length) add({ key: `tmr|${t}`, icon: '🗓', title: 'Mâine e încă gol', body: 'Două minute acum = o zi mai liniștită mâine.',
+      actions: [{ act: 'add-on', v: addDays(t, 1), label: '+ Planifică mâine' }] });
+  }
+  // 10. Dimineața: rezumat
+  if (nm < 12 * 60 && today.length) {
+    const evs = today.filter(isEvent).length;
+    const firstOpen = open[0];
+    add({ key: `brief|${t}`, icon: '☀️', title: greeting(),
+      body: `Azi ai ${evs ? (evs === 1 ? 'o întâlnire' : evs + ' întâlniri') + ' și ' : ''}${today.length - evs} taskuri (~${fmtDur(plannedMinutes(t))}).${firstOpen ? ` Începi cu ${q(esc(firstOpen.title))}${firstOpen.time ? ' la ' + firstOpen.time : ''}.` : ''}`,
+      actions: [{ act: 'plan-day', label: '✨ Planifică-mi ziua' }] });
+  }
+  return out;
+}
+function greeting() {
+  const h = new Date().getHours();
+  return h < 5 ? 'Încă treaz? 🌙' : h < 12 ? 'Bună dimineața! ☀️' : h < 18 ? 'Bună ziua! 👋' : 'Bună seara! 🌙';
+}
+function nudgeCard(n) {
+  return `<div class="nudge ${n.tone || ''}" ${n.id ? `data-id="${n.id}" data-ds="${n.ds || ''}"` : ''}>
+    <div class="ni">${n.icon}</div>
+    <div class="nb"><div class="nt">${n.title}</div>${n.body ? `<div class="nm">${n.body}</div>` : ''}
+      <div class="na">${n.actions.map((a) => `<button data-act="${a.act}"${a.v != null ? ` data-v="${esc(a.v)}"` : ''}>${a.label}</button>`).join('')}</div></div>
+    <button class="nx" data-act="dismiss" data-v="${esc(n.key)}" aria-label="Ascunde">×</button></div>`;
+}
+
+// ============================================================
+// Remindere (notificări locale + push prin ntfy)
+// ============================================================
+function buildReminders(fromTs, toTs) {
+  const S = state.settings, out = [];
+  const t = todayStr();
+  const push = (at, title, body, key) => { if (at >= fromTs && at <= toTs) out.push({ at, title, body, key: `${key}|${at}|${title}` }); };
+  for (let i = 0; i <= 3; i++) {
+    const ds = addDays(t, i);
+    const list = tasksOn(ds);
+    const open = list.filter((x) => !isDone(x, ds));
+    if (S.morning && list.length) {
+      const lines = open.slice(0, 8).map((x) => `${x.time ? x.time + ' ' : '• '}${x.title}`);
+      push(tsOf(ds, tMin(S.morning)), `Planul de ${ds === t ? 'azi' : relDay(ds).toLowerCase()} 📋`, `${open.length === 1 ? 'Un lucru' : open.length + ' lucruri'}:\n${lines.join('\n')}${open.length > 8 ? '\n…' : ''}`, `brief|${ds}`);
+    }
+    if (S.evening) push(tsOf(ds, tMin(S.evening)), 'Recapitularea zilei 🌙', 'Bifează ce ai terminat și mută restul pe mâine, ca să nu uiți nimic.', `eve|${ds}`);
+    for (const x of open) {
+      const ev = linkEvent(x);
+      if (x.time && x.reminder != null) {
+        const prep = isEvent(x) ? linkedTo(x, ds, 'before').filter((p) => !isDone(p, ds)) : [];
+        const lead = x.reminder ? `Începe în ${x.reminder >= 60 ? fmtDur(x.reminder) : x.reminder + ' min'}` : 'Acum';
+        let body = `${lead}${x.duration ? ` · ${fmtDur(x.duration)}` : ''}.`;
+        if (prep.length) body += ` Nu uita: ai de terminat ${prep.map((p) => q(p.title)).join(', ')}.`;
+        if (ev && x.link.type === 'before') body += ` E pentru ${q(ev.title)}${ev.time ? ' de la ' + ev.time : ''}.`;
+        if (ev && x.link.type === 'after') body += ` (după ${q(ev.title)})`;
+        if (x.subtasks.length) body += ` Pași: ${x.subtasks.filter((s) => !s.done).map((s) => s.t).slice(0, 4).join(', ')}.`;
+        push(tsOf(ds, tMin(x.time) - x.reminder), `⏰ ${x.time} · ${x.title}`, body, `task|${x.id}|${ds}`);
+      }
+      if (ev && ev.time && x.link.ds && (x.link.type === 'before' || !x.time)) {
+        if (x.link.type === 'before') push(tsOf(x.link.ds, tMin(ev.time) - (+S.prepLead || 60)), `Nu uita: ${x.title}`, `Trebuie gata pentru ${q(ev.title)} de la ${ev.time}.`, `prep|${x.id}`);
+        else push(tsOf(x.link.ds, endMin(ev)), `După ${ev.title}: ${x.title}`, 'Fă-o acum, cât e proaspăt.', `after|${x.id}`);
+      }
+    }
+    for (const x of state.tasks) {
+      if (x.deadline === ds && !x.done && !isRec(x) && S.morning) push(tsOf(ds, tMin(S.morning) + 1), `⏳ Termen azi: ${x.title}`, 'Nu-l lăsa pe ultima sută de metri.', `dl|${x.id}`);
+    }
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+async function notify(title, body, tag) {
+  try {
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification(title, { body, tag, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png' });
+    } else new Notification(title, { body, tag, icon: 'icons/icon-192.png' });
+  } catch (e) { /* ignorăm */ }
+}
+function checkReminders() {
+  if (state.settings.ntfyOn) return; // push-ul vine prin ntfy
+  if (!state.settings.notify || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const now = Date.now();
+  let changed = false;
+  for (const r of buildReminders(now - 10 * 60000, now)) {
+    if (state.sent[r.key]) continue;
+    state.sent[r.key] = r.at; changed = true;
+    notify(r.title, r.body, r.key);
+  }
+  if (changed) {
+    for (const [k, at] of Object.entries(state.sent)) if (typeof at !== 'number' || at < now - 3 * 86400000) delete state.sent[k];
+    persist();
+  }
+}
+const ntfyUrl = () => (state.settings.ntfyServer || 'https://ntfy.sh').replace(/\/+$/, '');
+async function ntfySend(title, message, atTs) {
+  const body = { topic: state.settings.ntfyTopic, title, message, tags: ['calendar'], priority: 4, click: location.href.split('#')[0] };
+  if (atTs) body.delay = String(Math.floor(atTs / 1000));
+  const r = await fetch(ntfyUrl() + '/', { method: 'POST', body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('ntfy ' + r.status);
+  return r;
+}
+let pushing = false;
+async function schedulePushes() {
+  const S = state.settings;
+  if (!S.ntfyOn || !S.ntfyTopic || pushing || !navigator.onLine) return;
+  pushing = true;
+  const now = Date.now();
+  let sent = 0;
+  try {
+    for (const r of buildReminders(now + 20000, now + 70 * 3600000)) {
+      if (state.pushed[r.key]) continue;
+      if (sent >= 40) break;
+      await ntfySend(r.title, r.body, r.at);
+      state.pushed[r.key] = r.at; sent++;
+    }
+  } catch (e) { /* încercăm data viitoare */ }
+  for (const [k, at] of Object.entries(state.pushed)) if (at < now - 86400000) delete state.pushed[k];
+  persist();
+  pushing = false;
+}
+function updateBadge() {
+  if (!navigator.setAppBadge) return;
+  const t = todayStr();
+  const n = tasksOn(t).filter((x) => !isDone(x, t)).length + overdue().length;
+  (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
+}
+
+// ============================================================
+// Idei / șabloane
+// ============================================================
+function nextMonthDay(day) { const d = new Date(); if (d.getDate() > day) d.setMonth(d.getMonth() + 1); d.setDate(day); return ymd(d); }
+const TEMPLATES = [
+  { id: 'evening', icon: '🌙', name: 'Plan pentru mâine', desc: '10 minute seara: nu uiți nimic a doua zi', tasks: () => [{ title: 'Planifică ziua de mâine', time: '21:30', duration: 10, repeat: 'daily', cat: 'personal', reminder: 0, subtasks: subs(['Bifează ce ai terminat', 'Mută restul pe mâine', 'Alege cele 3 lucruri importante']) }] },
+  { id: 'morning', icon: '🌅', name: 'Rutina de dimineață', desc: 'Pornește ziua cu planul în față', tasks: () => [{ title: 'Rutina de dimineață', time: '07:30', duration: 15, repeat: 'daily', cat: 'sanatate', reminder: 0, subtasks: subs(['Un pahar cu apă', '5 minute de mișcare', 'Citește planul de azi în Ritm']) }] },
+  { id: 'inbox', icon: '📥', name: 'Email & mesaje la ore fixe', desc: 'De 2 ori pe zi, ca să nu te întrerupă tot timpul', tasks: () => [{ title: 'Răspunde la email și mesaje', time: '09:00', duration: 20, repeat: 'weekdays', cat: 'munca', reminder: 0 }, { title: 'Răspunde la email și mesaje', time: '16:30', duration: 20, repeat: 'weekdays', cat: 'munca', reminder: 0 }] },
+  { id: 'weekly', icon: '🗓', name: 'Recapitulare săptămânală', desc: 'Duminică seara: ce a mers, ce urmează', tasks: () => [{ title: 'Recapitulare săptămânală', time: '18:00', duration: 30, repeat: 'days', days: [0], cat: 'personal', reminder: 0, subtasks: subs(['Ce am terminat săptămâna asta?', 'Ce a rămas și de ce?', 'Ce întâlniri am săptămâna viitoare?', 'Cele 3 obiective ale săptămânii']) }] },
+  { id: 'sport', icon: '💪', name: 'Sport de 3 ori pe săptămână', desc: 'Luni, miercuri și vineri la 18:30', tasks: () => [{ title: 'Antrenament', time: '18:30', duration: 60, repeat: 'days', days: [1, 3, 5], cat: 'sport', kind: 'event', reminder: 30 }] },
+  { id: 'water', icon: '💧', name: 'Pauze & apă', desc: 'Ridică-te și bea apă la 11, 15 și 17', tasks: () => [11, 15, 17].map((h) => ({ title: 'Pauză: ridică-te și bea apă', time: `${h}:00`, duration: 5, repeat: 'daily', cat: 'sanatate', reminder: 0 })) },
+  { id: 'bills', icon: '🧾', name: 'Facturi lunare', desc: 'Pe 1 ale lunii, cu listă de verificare', tasks: () => [{ title: 'Plătește facturile', date: nextMonthDay(1), time: '19:00', duration: 20, repeat: 'monthly', cat: 'casa', reminder: 0, subtasks: subs(['Curent', 'Gaz', 'Internet & telefon', 'Chirie / rată']) }] },
+  { id: 'home', icon: '🧹', name: 'Curățenie de weekend', desc: 'Sâmbătă la 10, împărțită în pași', tasks: () => [{ title: 'Curățenie', time: '10:00', duration: 90, repeat: 'days', days: [6], cat: 'casa', reminder: 15, subtasks: subs(['Rufe', 'Aspirat', 'Baie', 'Bucătărie', 'Cumpărături pentru săptămână']) }] },
+  { id: 'learn', icon: '📚', name: '20 de minute de învățat', desc: 'În zilele lucrătoare, seara', tasks: () => [{ title: 'Învăț ceva nou (20 min)', time: '20:00', duration: 20, repeat: 'weekdays', cat: 'studiu', reminder: 0 }] },
+];
+const tplAdded = (id) => state.tasks.some((t) => t.tpl === id);
+
+// ============================================================
+// Randare
+// ============================================================
 const ICON_L = '<svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>';
 const ICON_R = '<svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>';
 
+function repeatLabel(t) {
+  if (t.repeat === 'days') return (t.days || []).slice().sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)).map((d) => ZS[d]).join(', ');
+  return REPEAT[t.repeat];
+}
 function taskRow(t, ds, opts = {}) {
   const done = isDone(t, ds || null);
   const c = cat(t.cat);
   const meta = [];
   if (opts.showDate && t.date) meta.push(`<span class="${t.date < todayStr() && !done ? 'late' : ''}">${relDay(t.date)}</span>`);
-  if (t.time && !opts.timeCol) meta.push(`<span>${t.time}${t.duration ? '–' + minToT(tMin(t.time) + t.duration) : ''}</span>`);
+  if (t.time && !opts.timeCol) meta.push(`<span>${t.time}–${minToT(endMin(t))}</span>`);
+  else if (t.time && opts.timeCol) meta.push(`<span>până la ${minToT(endMin(t))}</span>`);
   else if (t.duration && !t.time) meta.push(`<span>⏱ ${fmtDur(t.duration)}</span>`);
-  if (isRec(t)) meta.push(`<span>↻ ${REPEAT[t.repeat]}</span>`);
+  if (isEvent(t)) meta.push('<span class="evt">Întâlnire</span>');
+  if (t.auto && t.time && !done) meta.push('<span title="Pus automat">✨ auto</span>');
+  if (t.link && linkEvent(t)) meta.push(`<span class="lnk">🔗 ${esc(linkLabel(t))}</span>`);
+  if (t.deadline && !done) meta.push(`<span class="${t.deadline <= todayStr() ? 'late' : ''}">⏳ până ${relDay(t.deadline).toLowerCase()}</span>`);
+  if (isRec(t)) meta.push(`<span>↻ ${repeatLabel(t)}</span>`);
   if (t.subtasks && t.subtasks.length) meta.push(`<span>☑ ${t.subtasks.filter((s) => s.done).length}/${t.subtasks.length}</span>`);
   if (t.reminder != null && t.time) meta.push('<span>🔔</span>');
   if (t.notes) meta.push('<span>📝</span>');
   if (c) meta.push(`<span class="cat" style="--cc:${c.color}">${esc(c.name)}</span>`);
   if (t.focusMin) meta.push(`<span>🎯 ${fmtDur(t.focusMin)}</span>`);
-  return `<div class="task ${done ? 'done' : ''} ${opts.timeCol ? 'has-time' : ''}" data-id="${t.id}" data-ds="${ds || ''}">
+  return `<div class="task ${done ? 'done' : ''} ${opts.timeCol ? 'has-time' : ''} ${isEvent(t) ? 'is-event' : ''}" data-id="${t.id}" data-ds="${ds || ''}" style="--c:${c ? c.color : 'var(--muted)'}">
     ${opts.timeCol ? `<div class="timecol">${t.time || ''}</div>` : ''}
-    <button class="check" data-act="toggle" style="--c:${c ? c.color : 'var(--muted)'}" aria-label="Bifează"></button>
+    <button class="check" data-act="toggle" aria-label="Bifează"></button>
     <div class="tbody" data-act="edit">
       <div class="ttl">${esc(t.title)}</div>
       ${meta.length ? `<div class="meta">${meta.join('')}</div>` : ''}
@@ -214,7 +617,6 @@ function taskRow(t, ds, opts = {}) {
     ${opts.extra || ''}
   </div>`;
 }
-
 function ring(pct, size = 76, stroke = 8, cls = '') {
   const r = (size - stroke) / 2, C = 2 * Math.PI * r;
   return `<svg viewBox="0 0 ${size} ${size}" class="${cls}"><circle class="bg" cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke-width="${stroke}"/>
@@ -230,7 +632,7 @@ function viewToday() {
   const nm = nowMin();
   const open = list.filter((x) => !isDone(x, t));
   const timedOpen = open.filter((x) => x.time);
-  let next = timedOpen.find((x) => tMin(x.time) + (x.duration || 0) > nm && tMin(x.time) <= nm)
+  const next = timedOpen.find((x) => endMin(x) > nm && tMin(x.time) <= nm)
     || open.filter((x) => !x.time && x.priority === 3)[0]
     || timedOpen.find((x) => tMin(x.time) > nm)
     || open.filter((x) => !x.time)[0]
@@ -241,15 +643,15 @@ function viewToday() {
     let lbl = 'Următorul pas';
     if (next.time) {
       const diff = tMin(next.time) - nm;
-      lbl = diff <= 0 ? (diff + (next.duration || 0) > 0 ? 'Acum' : 'Întârziat') : `Urmează în ${diff >= 60 ? fmtDur(diff) : diff + ' min'}`;
+      lbl = diff <= 0 ? (diff + durOf(next) > 0 ? 'Acum' : 'Întârziat') : `Urmează în ${diff >= 60 ? fmtDur(diff) : diff + ' min'}`;
     }
     nextHtml = `<div class="next" data-id="${next.id}" data-ds="${t}">
       <div class="lbl">${lbl}</div>
-      <div class="t">${esc(next.title)}</div>
-      <div class="m">${next.time ? next.time + (next.duration ? ' · ' + fmtDur(next.duration) : '') : 'fără oră fixă'}${next.subtasks && next.subtasks.length ? ` · ${next.subtasks.filter((s) => s.done).length}/${next.subtasks.length} pași` : ''}</div>
+      <div class="t">${isEvent(next) ? '📍 ' : ''}${esc(next.title)}</div>
+      <div class="m">${next.time ? next.time + '–' + minToT(endMin(next)) : 'fără oră fixă'}${linkEvent(next) ? ' · ' + esc(linkLabel(next)) : ''}${next.subtasks.length ? ` · ${next.subtasks.filter((s) => s.done).length}/${next.subtasks.length} pași` : ''}</div>
       <div class="acts">
         <button data-act="toggle">✓ Gata</button>
-        <button data-act="focus-on">▶ Focus</button>
+        ${isEvent(next) ? '' : '<button data-act="focus-on">▶ Focus</button>'}
         <button data-act="edit">Detalii</button>
       </div>
     </div>`;
@@ -266,9 +668,12 @@ function viewToday() {
   }
   if (timed.length && !nowPlaced) timeline += `<div class="nowline">${minToT(nm)}</div>`;
 
+  const ns = nudges().slice(0, 2);
   const plan = plannedMinutes(t);
   return `
-  <div class="hdr"><div><h1>Azi</h1><div class="sub">${fmtLong(t)}</div></div></div>
+  <div class="hdr"><div><h1>Azi</h1><div class="sub">${fmtLong(t)}</div></div>
+    <div class="hbtns"><button data-act="tab" data-tab="focus" aria-label="Focus">⏱</button><button data-act="plan-day" class="primary">✨ Planifică</button></div></div>
+  ${ns.length ? `<div class="nudges">${ns.map(nudgeCard).join('')}</div>` : ''}
   <div class="card progress">
     <div class="ring">${ring(pct)}<b>${Math.round(pct * 100)}%</b></div>
     <div class="pstats">
@@ -282,9 +687,51 @@ function viewToday() {
   ${od.length ? `<div class="sec"><h2>Restanțe (${od.length})</h2><button class="link" data-act="move-all-today">Mută-le pe azi</button></div>
     <div class="card">${od.map((x) => taskRow(x, '', { showDate: true, extra: `<button class="mini" data-act="move-today">Azi</button>` })).join('')}</div>` : ''}
   ${timed.length ? `<div class="sec"><h2>Program</h2></div><div class="card">${timeline}</div>` : ''}
-  <div class="sec"><h2>Oricând azi</h2><button class="link" data-act="add-on" data-d="${t}">Adaugă</button></div>
-  <div class="card">${untimed.length ? untimed.map((x) => taskRow(x, t)).join('') : '<div class="empty">Nimic fără oră. Apasă + ca să adaugi.</div>'}</div>
+  <div class="sec"><h2>${timed.length ? 'Fără oră' : 'De făcut azi'}</h2><button class="link" data-act="add-on" data-v="${t}">Adaugă</button></div>
+  <div class="card">${untimed.length ? untimed.map((x) => taskRow(x, t)).join('') : `<div class="empty">${state.settings.autoPlan && timed.length ? 'Tot ce ai e deja în program ✨' : 'Nimic aici. Apasă + ca să adaugi.'}</div>`}</div>
   `;
+}
+
+function viewAssistant() {
+  const S = state.settings;
+  const ns = nudges();
+  const pushState = S.ntfyOn && S.ntfyTopic ? '✅ Pornite' : S.notify && 'Notification' in window && Notification.permission === 'granted' ? '🟡 Doar cu aplicația deschisă' : 'Configurează';
+  return `<div class="hdr"><div><h1>Asistent</h1><div class="sub">${greeting()}</div></div></div>
+  <div class="card hero">
+    <div class="hero-t">✨ Îți fac eu programul</div>
+    <div class="hero-d">Pun taskurile în golurile dintre întâlniri, după priorități și termene, și țin cont de ce trebuie terminat înainte sau după fiecare întâlnire.</div>
+    <div class="row-btns"><button class="btn primary" data-act="plan-day">Planifică-mi ziua</button><button class="btn" data-act="plan-tomorrow">Mâine</button></div>
+    <label class="switch-row"><span>Planifică automat când adaug ceva</span><input type="checkbox" class="sw" id="s-autoplan" ${S.autoPlan ? 'checked' : ''}></label>
+    <label class="switch-row"><span>La fiecare întâlnire, adaugă „ce urmează după”</span><input type="checkbox" class="sw" id="s-autofollow" ${S.autoFollow ? 'checked' : ''}></label>
+  </div>
+
+  <div class="sec"><h2>Ce ar trebui să știi</h2></div>
+  ${ns.length ? `<div class="nudges">${ns.map(nudgeCard).join('')}</div>` : '<div class="card"><div class="empty">Totul e sub control ✓<br>Îți spun aici imediat ce ceva necesită atenție.</div></div>'}
+
+  <div class="sec"><h2>Descarcă-ți mintea</h2></div>
+  <button class="card dump" data-act="dump"><span class="big-ico">🧠</span><span><b>Scrie tot ce ai în cap</b><br><span class="muted">Câte un lucru pe rând. Eu le pun în calendar și în program.</span></span></button>
+
+  <div class="sec"><h2>Remindere pe telefon</h2></div>
+  <div class="card">
+    <button class="row" data-act="push-setup"><span>📲 Notificări push</span><span class="link">${pushState}</span></button>
+    <label class="row"><span>☀️ Planul zilei la</span><input type="time" id="s-morning" value="${S.morning}"></label>
+    <label class="row"><span>🌙 Recapitulare seara la</span><input type="time" id="s-evening" value="${S.evening}"></label>
+    <label class="row"><span>📌 „Nu uita” înainte de întâlniri</span><select id="s-prep">${[15, 30, 60, 120, 180].map((v) => `<option value="${v}" ${+S.prepLead === v ? 'selected' : ''}>${fmtDur(v)}</option>`).join('')}</select></label>
+  </div>
+  <div class="help">Primești dimineața lista cu tot ce ai de făcut, un reminder înainte de fiecare lucru, „nu uita” înainte de ședințe, ce ai de făcut după fiecare întâlnire și recapitularea de seară.</div>
+
+  <div class="sec"><h2>Programul tău</h2></div>
+  <div class="card">
+    <label class="row"><span>Încep ziua la</span><input type="time" id="s-start" value="${S.dayStart}"></label>
+    <label class="row"><span>Termin ziua la</span><input type="time" id="s-end" value="${S.dayEnd}"></label>
+    <label class="row"><span>Pauză între lucruri</span><select id="s-buffer">${[0, 5, 10, 15, 20, 30].map((v) => `<option value="${v}" ${+S.buffer === v ? 'selected' : ''}>${v ? v + ' min' : 'fără'}</option>`).join('')}</select></label>
+    <label class="row"><span>Durată implicită task</span><select id="s-defdur">${[15, 20, 30, 45, 60].map((v) => `<option value="${v}" ${+S.defaultDur === v ? 'selected' : ''}>${v} min</option>`).join('')}</select></label>
+  </div>
+
+  <div class="sec"><h2>Idei care te pot ajuta</h2></div>
+  <div class="card">${TEMPLATES.map((tp) => `<div class="tpl"><span class="big-ico">${tp.icon}</span><div class="tb"><b>${tp.name}</b><div class="muted">${tp.desc}</div></div>
+    ${tplAdded(tp.id) ? '<span class="added">Adăugat ✓</span>' : `<button class="mini" data-act="tpl" data-v="${tp.id}">Adaugă</button>`}</div>`).join('')}</div>
+  <div class="help">După ce le adaugi le poți modifica: ora, zilele, pașii.</div>`;
 }
 
 function viewCal() {
@@ -301,19 +748,20 @@ function viewCal() {
     const tl = tasksOn(ds);
     const allDone = tl.length && tl.every((x) => isDone(x, ds));
     const dots = allDone ? '<i class="ok"></i>' : tl.slice(0, 3).map((x) => `<i style="--c:${(cat(x.cat) || {}).color || 'var(--muted)'}"></i>`).join('');
-    cells += `<button class="day ${d.getMonth() !== m ? 'out' : ''} ${ds === t ? 'today' : ''} ${ds === ui.calSel ? 'sel' : ''}" data-act="cal-day" data-d="${ds}">
+    cells += `<button class="day ${d.getMonth() !== m ? 'out' : ''} ${ds === t ? 'today' : ''} ${ds === ui.calSel ? 'sel' : ''}" data-act="cal-day" data-v="${ds}">
       <span class="n">${d.getDate()}</span><span class="dots">${dots}</span></button>`;
   }
   const sel = ui.calSel;
   const list = tasksOn(sel);
   const plan = plannedMinutes(sel);
-  const over = plan > state.settings.dayHours * 60;
+  const avail = tMin(state.settings.dayEnd) - tMin(state.settings.dayStart);
+  const over = plan > Math.min(avail, state.settings.dayHours * 60);
   return `
   <div class="hdr"><div><h1>${LUNI[m][0].toUpperCase() + LUNI[m].slice(1)}</h1><div class="sub">${y}</div></div>
     <div class="calnav"><button data-act="cal-prev" aria-label="Luna anterioară">${ICON_L}</button><button class="link" data-act="cal-today" style="width:auto;padding:0 6px">Azi</button><button data-act="cal-next" aria-label="Luna următoare">${ICON_R}</button></div></div>
   <div class="card"><div class="grid">${cells}</div></div>
-  <div class="sec"><h2>${sel === t ? 'Azi · ' : ''}${fmtLong(sel)}</h2><button class="link" data-act="add-on" data-d="${sel}">Adaugă</button></div>
-  ${plan ? `<div class="load ${over ? 'over' : ''}" style="margin:0 4px 8px">${over ? '⚠️ ' : ''}${fmtDur(plan)} planificate${over ? ` – peste ${state.settings.dayHours}h, poate muți ceva?` : ''}</div>` : ''}
+  <div class="sec"><h2>${sel === t ? 'Azi · ' : ''}${fmtLong(sel)}</h2><span><button class="link" data-act="plan-sel" style="margin-right:14px">✨ Planifică</button><button class="link" data-act="add-on" data-v="${sel}">Adaugă</button></span></div>
+  ${plan ? `<div class="load ${over ? 'over' : ''}" style="margin:0 4px 8px">${over ? '⚠️ ' : ''}${fmtDur(plan)} planificate${over ? ' – e cam mult, poate muți ceva?' : ''}</div>` : ''}
   <div class="card">${list.length ? list.map((x) => taskRow(x, sel, { timeCol: true })).join('') : '<div class="empty">Zi liberă. Atinge „Adaugă” ca să planifici ceva.</div>'}</div>`;
 }
 
@@ -338,9 +786,9 @@ function routineStreak(t) {
 
 function viewList() {
   const t = todayStr();
-  const q = norm(ui.search.trim());
-  const match = (x) => !q || norm(x.title).includes(q) || norm(x.notes || '').includes(q);
-  const seg = [['plan', 'Planificate'], ['someday', 'Cândva'], ['rut', 'Rutine'], ['done', 'Finalizate']]
+  const qq = norm(ui.search.trim());
+  const match = (x) => !qq || norm(x.title).includes(qq) || norm(x.notes || '').includes(qq);
+  const seg = [['plan', 'Planificate'], ['someday', 'Cândva'], ['rut', 'Rutine'], ['done', 'Gata']]
     .map(([k, l]) => `<button class="${ui.listMode === k ? 'on' : ''}" data-act="list-mode" data-v="${k}">${l}</button>`).join('');
   let body = '';
   if (ui.listMode === 'plan') {
@@ -357,14 +805,14 @@ function viewList() {
       <div class="card">${items.length ? items.map((x) => taskRow(x, '', { extra: '<button class="mini" data-act="move-today">Azi</button>' })).join('') : '<div class="empty">Gol. Scrie „cândva” în adăugarea rapidă.</div>'}</div>`;
   } else if (ui.listMode === 'rut') {
     const items = state.tasks.filter((x) => isRec(x) && match(x));
-    body = `<div class="help" style="padding:12px 4px 8px">Obiceiurile tale din ultimele 7 zile.</div><div class="card">${items.length ? items.map((x) => {
+    body = `<div class="help" style="padding:12px 4px 8px">Obiceiurile și întâlnirile repetate, ultimele 7 zile.</div><div class="card">${items.length ? items.map((x) => {
       const c = cat(x.cat), occ = occursOn(x, t), d = isDone(x, t);
-      return `<div class="rut ${d ? 'done' : ''}" data-id="${x.id}" data-ds="${t}">
-        ${occ ? `<button class="check" data-act="toggle" style="--c:${c ? c.color : 'var(--accent)'}"></button>` : '<span style="width:26px"></span>'}
+      return `<div class="rut ${d ? 'done' : ''}" data-id="${x.id}" data-ds="${t}" style="--c:${c ? c.color : 'var(--accent)'}">
+        ${occ ? '<button class="check" data-act="toggle"></button>' : '<span style="width:26px"></span>'}
         <div class="tbody" data-act="edit"><div class="ttl">${esc(x.title)}</div>
-          <div class="meta"><span>↻ ${REPEAT[x.repeat]}${x.time ? ' · ' + x.time : ''}</span></div><div class="rdots">${routineDots(x)}</div></div>
+          <div class="meta"><span>↻ ${repeatLabel(x)}${x.time ? ' · ' + x.time : ''}</span></div><div class="rdots">${routineDots(x)}</div></div>
         <span class="streak">🔥 ${routineStreak(x)}</span></div>`;
-    }).join('') : '<div class="empty">Nicio rutină. Scrie de ex. „zilnic la 7 sport 20min”.</div>'}</div>`;
+    }).join('') : '<div class="empty">Nicio rutină. Vezi ideile din tab-ul Asistent.</div>'}</div>`;
   } else {
     const items = state.tasks.filter((x) => !isRec(x) && x.done && match(x)).sort((a, b) => (b.completedOn || '').localeCompare(a.completedOn || '')).slice(0, 150);
     body = `<div class="card" style="margin-top:12px">${items.length ? items.map((x) => taskRow(x, '', { showDate: true })).join('') : '<div class="empty">Încă nimic bifat.</div>'}</div>
@@ -384,15 +832,16 @@ function timerObj() {
 }
 const timerLeft = () => { const T = timerObj(); return T.running ? Math.max(0, Math.round((T.endAt - Date.now()) / 1000)) : T.left; };
 const timerTotal = () => (timerObj().mode === 'work' ? state.settings.work : state.settings.brk) * 60;
+function last7() { const out = []; for (let i = 6; i >= 0; i--) out.push(addDays(todayStr(), -i)); return out; }
 
 function viewFocus() {
   const T = timerObj();
   const t = todayStr();
-  const opts = tasksOn(t).concat(overdue()).filter((x) => !isDone(x, t));
+  const opts = tasksOn(t).concat(overdue()).filter((x) => !isDone(x, t) && !isEvent(x));
   if (T.taskId && !opts.find((x) => x.id === T.taskId)) { const tk = findTask(T.taskId); if (tk) opts.unshift(tk); }
   const left = timerLeft();
   const tk = T.taskId && findTask(T.taskId);
-  return `<div class="hdr"><div><h1>Focus</h1><div class="sub">Pomodoro: ${state.settings.work} min lucru · ${state.settings.brk} min pauză</div></div></div>
+  return `<div class="hdr"><div><h1>Focus</h1><div class="sub">${state.settings.work} min lucru · ${state.settings.brk} min pauză</div></div><div class="hbtns"><button data-act="tab" data-tab="azi">Înapoi</button></div></div>
   <div class="card focus">
     <select class="sel" id="focus-task">
       <option value="">— Lucrez la… (alege un task) —</option>
@@ -405,16 +854,15 @@ function viewFocus() {
       <button class="btn round primary" data-act="${T.running ? 't-pause' : 't-start'}" style="width:90px;height:90px;font-size:17px">${T.running ? 'Pauză' : 'Start'}</button>
       <button class="btn round" data-act="t-skip">${T.mode === 'work' ? 'Sari' : 'Lucru'}</button>
     </div>
-    ${tk ? `<div style="margin-top:20px"><button class="btn block" data-act="t-done-task">✓ Am terminat „${esc(tk.title)}”</button></div>` : ''}
+    ${tk && tk.subtasks.length ? `<div class="card subs" style="margin-top:20px;text-align:left;background:var(--card-2)">${tk.subtasks.map((s, i) => `<div class="sub ${s.done ? 'done' : ''}"><button class="check" data-act="fsub" data-v="${i}"></button><span>${esc(s.t)}</span></div>`).join('')}</div>` : ''}
+    ${tk ? `<div style="margin-top:14px"><button class="btn block" data-act="t-done-task">✓ Am terminat ${q(esc(tk.title))}</button></div>` : ''}
   </div>
   <div class="kpis" style="margin-top:12px">
     <div class="kpi"><div class="v">${fmtDur(state.focusLog[t] || 0)}</div><div class="l">focus azi</div></div>
     <div class="kpi"><div class="v">${fmtDur(last7().reduce((s, d) => s + (state.focusLog[d] || 0), 0))}</div><div class="l">focus în 7 zile</div></div>
   </div>
-  <div class="help" style="padding:12px 4px">Sfat: ține aplicația deschisă pe ecran în timpul sesiunii. Cronometrul continuă corect și dacă ieși, dar alerta sonoră se aude doar cu aplicația deschisă.</div>`;
+  <div class="help" style="padding:12px 4px">Cronometrul merge corect și dacă ieși din aplicație, dar sunetul de final se aude doar cu ea deschisă.</div>`;
 }
-
-function last7() { const out = []; for (let i = 6; i >= 0; i--) out.push(addDays(todayStr(), -i)); return out; }
 
 function viewMore() {
   const days = last7();
@@ -433,7 +881,7 @@ function viewMore() {
   <div class="kpis">
     <div class="kpi"><div class="v">🔥 ${streak()}</div><div class="l">zile la rând cu progres</div></div>
     <div class="kpi"><div class="v">${rate}%</div><div class="l">din ce ai planificat (${did}/${planned})</div></div>
-    <div class="kpi"><div class="v">${counts.reduce((a, b) => a + b, 0)}</div><div class="l">taskuri bifate</div></div>
+    <div class="kpi"><div class="v">${counts.reduce((a, b) => a + b, 0)}</div><div class="l">lucruri bifate</div></div>
     <div class="kpi"><div class="v">${fmtDur(days.reduce((s, d) => s + (state.focusLog[d] || 0), 0))}</div><div class="l">timp de focus</div></div>
   </div>
   <div class="sec"><h2>Bifate pe zi</h2></div>
@@ -445,24 +893,19 @@ function viewMore() {
     <li>Deschide pagina în <b>Safari</b></li><li>Apasă butonul <b>Partajează</b> (pătratul cu săgeată)</li>
     <li>Alege <b>„Adaugă pe ecranul principal”</b></li><li>Deschide <b>Ritm</b> de pe ecranul principal</li></ol></div>`}
 
-  <div class="sec"><h2>Mementouri</h2></div>
-  <div class="card">
-    <button class="row" data-act="notif"><span>🔔 Notificări</span><span class="link">${notifState}</span></button>
-    <label class="row"><span>Memento implicit</span><select id="s-rem">${remOpts.map(([v, l]) => `<option value="${v}" ${S.reminder === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-    <button class="row" data-act="ics-all"><span>📅 Trimite tot în Calendarul iPhone</span><span class="link">.ics</span></button>
-  </div>
-  <div class="help">Pe iPhone, notificările web merg doar cu aplicația instalată pe ecranul principal (iOS 16.4+). Pentru alarme garantate, folosește „Adaugă în Calendarul iPhone” la fiecare task: alarma vine de la Calendarul iPhone, chiar dacă Ritm e închisă.</div>
-
   <div class="sec"><h2>Setări</h2></div>
   <div class="card">
+    <button class="row" data-act="notif"><span>🔔 Notificări în aplicație</span><span class="link">${notifState}</span></button>
+    <label class="row"><span>Reminder implicit</span><select id="s-rem">${remOpts.map(([v, l]) => `<option value="${v}" ${S.reminder === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+    <button class="row" data-act="ics-all"><span>📅 Trimite tot în Calendarul iPhone</span><span class="link">.ics</span></button>
     <label class="row"><span>Durata focus (min)</span><input id="s-work" type="number" inputmode="numeric" min="5" max="120" value="${S.work}"></label>
     <label class="row"><span>Durata pauză (min)</span><input id="s-brk" type="number" inputmode="numeric" min="1" max="60" value="${S.brk}"></label>
-    <label class="row"><span>Ore disponibile pe zi</span><input id="s-hours" type="number" inputmode="numeric" min="1" max="18" value="${S.dayHours}"></label>
+    <label class="row"><span>Ore de lucru pe zi</span><input id="s-hours" type="number" inputmode="numeric" min="1" max="18" value="${S.dayHours}"></label>
   </div>
 
   <div class="sec"><h2>Categorii</h2></div>
   <div class="card">
-    ${state.cats.map((c) => `<div class="row" data-cat="${c.id}"><input type="color" value="${c.color}" data-catcolor="${c.id}"><input value="${esc(c.name)}" data-catname="${c.id}" style="text-align:left;color:var(--text)"><button class="link danger" data-act="cat-del" data-v="${c.id}">Șterge</button></div>`).join('')}
+    ${state.cats.map((c) => `<div class="row"><input type="color" value="${c.color}" data-catcolor="${c.id}"><input value="${esc(c.name)}" data-catname="${c.id}" style="text-align:left;color:var(--text)"><button class="link danger" data-act="cat-del" data-v="${c.id}">Șterge</button></div>`).join('')}
     <button class="row" data-act="cat-add"><span class="link">+ Categorie nouă</span></button>
   </div>
 
@@ -472,19 +915,23 @@ function viewMore() {
     <label class="row" style="cursor:pointer"><span>⬆️ Restaurează din copie</span><input type="file" id="import" accept="application/json,.json" style="display:none"></label>
     <button class="row" data-act="wipe"><span class="link danger">Șterge toate datele</span></button>
   </div>
-  <div class="help">Datele stau doar pe telefonul tău, în aplicație. Fă din când în când o copie de siguranță (o poți pune în Fișiere / iCloud Drive).</div>
-  <div class="help" style="text-align:center;padding:24px 0 0">Ritm · v1.0</div>`;
+  <div class="help">Datele stau doar pe telefonul tău. Fă din când în când o copie de siguranță (o poți pune în Fișiere / iCloud Drive).</div>
+  <div class="help" style="text-align:center;padding:24px 0 0">Ritm · v2.0</div>`;
 }
 
 function render() {
   const v = $('#view');
-  const views = { azi: viewToday, cal: viewCal, list: viewListPage, focus: viewFocus, more: viewMore };
+  const views = { azi: viewToday, cal: viewCal, asist: viewAssistant, list: viewListPage, focus: viewFocus, more: viewMore };
   v.innerHTML = views[ui.tab]();
   $$('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === ui.tab));
   $('#fab').hidden = ui.tab === 'focus' || ui.tab === 'more';
+  const badge = $('#asist-badge');
+  if (badge) { const n = nudges().filter((x) => x.tone === 'warn').length; badge.textContent = n; badge.hidden = !n; }
 }
 
-// ---------- sheet (editor / adăugare rapidă) ----------
+// ============================================================
+// Sheet-uri (editor, adăugare rapidă, plan, push)
+// ============================================================
 function openSheet(html) {
   const sh = $('#sheet');
   sh.innerHTML = html;
@@ -498,28 +945,40 @@ function closeSheet() {
   $('#sheet').innerHTML = '';
   document.body.style.overflow = '';
   draft = null;
+  pendingPlan = null;
 }
 
 let draft = null;
 const DURS = [0, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240];
-const REMS = [[null, 'Fără'], [0, 'La ora începerii'], [5, '5 min înainte'], [10, '10 min înainte'], [15, '15 min înainte'], [30, '30 min înainte'], [60, '1 oră înainte'], [1440, 'Cu o zi înainte']];
+const REMS = [[null, 'Fără'], [0, 'La ora începerii'], [5, '5 min înainte'], [10, '10 min înainte'], [15, '15 min înainte'], [30, '30 min înainte'], [60, '1 oră înainte'], [120, '2 ore înainte'], [1440, 'Cu o zi înainte']];
 
+function upcomingEvents() {
+  const t = todayStr(), out = [];
+  for (let i = -1; i < 14; i++) { const ds = addDays(t, i); for (const e of tasksOn(ds)) if (isEvent(e) && e.time) out.push({ e, ds }); }
+  return out;
+}
 function openEditor(t, ds, preset = {}) {
-  draft = t ? JSON.parse(JSON.stringify(t)) : {
-    id: null, title: '', notes: '', date: todayStr(), time: '', duration: 0, priority: 2, cat: null, repeat: 'none',
-    reminder: state.settings.reminder, subtasks: [], done: false, doneDates: [], ...preset,
-  };
+  draft = t ? JSON.parse(JSON.stringify(t)) : { ...baseTask(), id: null, reminder: state.settings.reminder, ...preset };
   draft._ds = ds;
   openSheet(editorHtml());
-  if (!t) $('#f-title').focus();
+  if (!t) { const i = $('#f-title'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }
 }
 function editorHtml() {
   const d = draft;
   const durs = DURS.includes(d.duration || 0) ? DURS : [...DURS, d.duration].sort((a, b) => a - b);
-  return `<div class="sheet-head"><button class="link" data-act="close">Anulează</button><b>${d.id ? 'Detalii' : 'Task nou'}</b><button class="link strong" data-act="save">Salvează</button></div>
+  const evs = upcomingEvents().filter(({ e }) => e.id !== d.id);
+  const linkVal = d.link ? `${d.link.type}|${d.link.id}|${d.link.ds}` : '';
+  if (d.link && !evs.find(({ e, ds }) => e.id === d.link.id && ds === d.link.ds)) { const e = findTask(d.link.id); if (e) evs.unshift({ e, ds: d.link.ds }); }
+  const evDs = d._ds || d.date;
+  const linkedHere = d.id && isEvent(d) && d.time ? linkedTo(d, evDs, 'before').concat(linkedTo(d, evDs, 'after')) : [];
+  return `<div class="sheet-head"><button class="link" data-act="close">Anulează</button><b>${d.id ? 'Detalii' : 'Nou'}</b><button class="link strong" data-act="save">Salvează</button></div>
   <div class="sheet-body">
-    <input id="f-title" class="big" placeholder="Ce ai de făcut?" value="${esc(d.title)}" enterkeyhint="done" autocomplete="off">
-    <textarea id="f-notes" placeholder="Notițe, link-uri, detalii…">${esc(d.notes)}</textarea>
+    <div class="seg" id="f-kind" style="margin-bottom:12px">
+      <button class="${!isEvent(d) ? 'on' : ''}" data-act="kind" data-v="task">✓ De făcut</button>
+      <button class="${isEvent(d) ? 'on' : ''}" data-act="kind" data-v="event">📍 Întâlnire</button>
+    </div>
+    <input id="f-title" class="big" placeholder="${isEvent(d) ? 'ex: Ședință cu echipa' : 'Ce ai de făcut?'}" value="${esc(d.title)}" enterkeyhint="done" autocomplete="off">
+    <textarea id="f-notes" placeholder="Notițe, adresă, link-uri, detalii…">${esc(d.notes)}</textarea>
     <div class="card group">
       <label class="row"><span>📅 Data</span><input type="date" id="f-date" value="${d.date || ''}"></label>
       <div class="chips">
@@ -529,10 +988,23 @@ function editorHtml() {
         <button class="chip" data-act="setdate" data-v="">Cândva</button>
       </div>
       <label class="row"><span>⏰ Ora</span><input type="time" id="f-time" value="${d.time || ''}"></label>
-      <label class="row"><span>⏱ Durată</span><select id="f-dur">${durs.map((m) => `<option value="${m}" ${m === (d.duration || 0) ? 'selected' : ''}>${m ? fmtDur(m) : '—'}</option>`).join('')}</select></label>
-      <label class="row"><span>🔔 Memento</span><select id="f-rem">${REMS.map(([v, l]) => `<option value="${v}" ${d.reminder === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      ${d.auto && d.time ? '<div class="help" style="padding:0 16px 10px">✨ Ora a fost pusă automat. Dacă o schimbi, rămâne fixă.</div>' : ''}
+      ${!d.time && !isEvent(d) && state.settings.autoPlan ? '<div class="help" style="padding:0 16px 10px">Lasă ora goală și ți-o aleg eu ✨</div>' : ''}
+      <label class="row"><span>⏱ Durată</span><select id="f-dur">${durs.map((m) => `<option value="${m}" ${m === (d.duration || 0) ? 'selected' : ''}>${m ? fmtDur(m) : 'automat'}</option>`).join('')}</select></label>
+      <label class="row"><span>🔔 Reminder</span><select id="f-rem">${REMS.map(([v, l]) => `<option value="${v}" ${d.reminder === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       <label class="row"><span>↻ Repetă</span><select id="f-rep">${Object.entries(REPEAT).map(([k, l]) => `<option value="${k}" ${d.repeat === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <div class="chips" id="f-days" ${d.repeat === 'days' ? '' : 'hidden'}>${[1, 2, 3, 4, 5, 6, 0].map((n) => `<button class="chip ${(d.days || []).includes(n) ? 'on' : ''}" data-act="day" data-v="${n}">${ZS[n]}</button>`).join('')}</div>
     </div>
+    ${!isEvent(d) ? `<div class="card group">
+      <label class="row"><span>⏳ Termen limită</span><input type="date" id="f-deadline" value="${d.deadline || ''}"></label>
+      <label class="row"><span>🔗 Legat de</span><select id="f-link"><option value="">— nimic —</option>
+        ${evs.map(({ e, ds }) => ['before', 'after'].map((ty) => { const v = `${ty}|${e.id}|${ds}`; return `<option value="${v}" ${v === linkVal ? 'selected' : ''}>${ty === 'before' ? 'Înainte de' : 'După'}: ${esc(e.title)} (${relDay(ds).toLowerCase()} ${e.time})</option>`; }).join('')).join('')}
+      </select></label>
+    </div>
+    <div class="help">„Înainte de” o întâlnire = îți amintesc să-l termini până atunci. „După” = îți amintesc imediat ce se termină întâlnirea.</div>` : ''}
+    ${d.id && isEvent(d) && d.time ? `<div class="label">Legat de această întâlnire</div>
+      <div class="card">${linkedHere.map((x) => taskRow(x, evDs)).join('') || '<div class="empty" style="padding:14px">Nimic încă.</div>'}</div>
+      <div class="row-btns"><button class="btn" data-act="ev-prep">+ De pregătit înainte</button><button class="btn" data-act="ev-after">+ De făcut după</button></div>` : ''}
     <div class="label">Prioritate</div>
     <div class="seg" id="f-prio">${[1, 2, 3].map((p) => `<button class="${d.priority === p ? 'on' : ''}" data-act="prio" data-v="${p}">${p === 3 ? '❗ ' : ''}${PRIO[p]}</button>`).join('')}</div>
     <div class="label">Categorie</div>
@@ -540,11 +1012,11 @@ function editorHtml() {
       <button class="chip ${!d.cat ? 'on' : ''}" data-act="pickcat" data-v="">Fără</button>
       ${state.cats.map((c) => `<button class="chip ${d.cat === c.id ? 'on' : ''}" data-act="pickcat" data-v="${c.id}" style="--c:${c.color}"><span class="sw"></span>${esc(c.name)}</button>`).join('')}
     </div>
-    <div class="label">Pași mici</div>
+    <div class="label">${isEvent(d) ? 'De luat / de discutat' : 'Pași mici'}</div>
     <div id="f-subs">${subsHtml()}</div>
-    <div class="addsub"><input id="f-newsub" placeholder="Împarte taskul în pași…" enterkeyhint="enter" autocomplete="off"><button data-act="addsub" aria-label="Adaugă pas">+</button></div>
+    <div class="addsub"><input id="f-newsub" placeholder="${isEvent(d) ? 'ex: laptopul, întrebarea despre buget…' : 'Împarte taskul în pași…'}" enterkeyhint="enter" autocomplete="off"><button data-act="addsub" aria-label="Adaugă pas">+</button></div>
     ${d.id ? `<div class="actions">
-      <button class="btn primary" data-act="ed-focus">▶ Pornește o sesiune de focus</button>
+      ${!isEvent(d) ? '<button class="btn primary" data-act="ed-focus">▶ Pornește o sesiune de focus</button>' : ''}
       ${!isRec(d) ? '<button class="btn" data-act="postpone">Amână pe mâine</button>' : ''}
       <button class="btn" data-act="ics-one">📅 Adaugă în Calendarul iPhone</button>
       <button class="btn" data-act="duplicate">Duplică</button>
@@ -555,25 +1027,35 @@ function editorHtml() {
 function subsHtml() {
   const s = draft.subtasks || [];
   if (!s.length) return '';
-  return `<div class="card subs">${s.map((x, i) => `<div class="sub ${x.done ? 'done' : ''}"><button class="check" data-act="subtoggle" data-i="${i}"></button><span>${esc(x.t)}</span><button class="x" data-act="subdel" data-i="${i}" aria-label="Șterge pasul">×</button></div>`).join('')}</div>`;
+  return `<div class="card subs">${s.map((x, i) => `<div class="sub ${x.done ? 'done' : ''}"><button class="check" data-act="subtoggle" data-v="${i}"></button><span>${esc(x.t)}</span><button class="x" data-act="subdel" data-v="${i}" aria-label="Șterge pasul">×</button></div>`).join('')}</div>`;
 }
 function syncDraft() {
   if (!draft || !$('#f-title')) return;
   draft.title = $('#f-title').value.trim();
   draft.notes = $('#f-notes').value;
   draft.date = $('#f-date').value || null;
-  draft.time = $('#f-time').value || '';
+  const newTime = $('#f-time').value || '';
+  if (newTime !== (draft.time || '')) draft.auto = false;
+  draft.time = newTime;
   draft.duration = +$('#f-dur').value || 0;
   const r = $('#f-rem').value;
   draft.reminder = r === 'null' ? null : +r;
   draft.repeat = $('#f-rep').value;
+  if ($('#f-deadline')) draft.deadline = $('#f-deadline').value || null;
+  if ($('#f-link')) {
+    const v = $('#f-link').value;
+    if (v) { const [type, id, ds] = v.split('|'); draft.link = { type, id, ds }; } else draft.link = null;
+  }
 }
-function saveDraft() {
+function saveDraft(silent) {
   syncDraft();
-  if (!draft.title) { toast('Scrie un titlu'); $('#f-title').focus(); return; }
+  if (!draft.title) { toast('Scrie un titlu'); $('#f-title').focus(); return null; }
   if (isRec(draft) && !draft.date) draft.date = todayStr();
+  if (draft.repeat === 'days' && !(draft.days || []).length) draft.repeat = 'none';
+  if (isEvent(draft)) { draft.link = null; draft.deadline = null; }
   const { _ds, ...clean } = draft;
-  if (clean.id) {
+  const isNew = !clean.id;
+  if (!isNew) {
     const i = state.tasks.findIndex((x) => x.id === clean.id);
     if (i >= 0) state.tasks[i] = clean;
   } else {
@@ -581,25 +1063,45 @@ function saveDraft() {
     clean.createdAt = Date.now();
     state.tasks.push(clean);
   }
-  save();
   closeSheet();
+  afterAdd([clean], isNew, silent);
+  return clean;
+}
+// după ce se adaugă/modifică ceva: follow-up automat + replanificare
+function afterAdd(tasks, isNew, silent) {
+  const S = state.settings;
+  if (isNew && S.autoFollow) {
+    for (const t of tasks) {
+      if (!isEvent(t) || !t.time || !t.date || isRec(t)) continue;
+      if (linkedTo(t, t.date, 'after').length) continue;
+      state.tasks.push({ ...baseTask(), title: `Notează ce urmează după: ${t.title}`, date: t.date, duration: 10, cat: t.cat, link: { id: t.id, ds: t.date, type: 'after' }, reminder: null,
+        subtasks: subs(['Ce s-a hotărât?', 'Ce am eu de făcut și până când?', 'Trimite rezumatul / mulțumirea']) });
+    }
+  }
+  save();
+  const td = todayStr();
+  if (tasks.some((t) => (t.date && t.date <= td) || (isRec(t) && occursOn(t, td)))) autoPlanToday(silent);
   render();
 }
 
-let quickBase;
-function openQuick(base) {
-  quickBase = base;
-  openSheet(`<div class="sheet-head"><button class="link" data-act="close">Gata</button><b>Adaugă rapid</b><button class="link strong" data-act="q-add">Adaugă</button></div>
+// adăugare rapidă
+let quickBase, quickPreset;
+function openQuick(base, preset) {
+  quickBase = base; quickPreset = preset || null;
+  const ev = preset && preset.link ? findTask(preset.link.id) : null;
+  const title = ev ? `${preset.link.type === 'before' ? 'Pentru' : 'După'} ${esc(ev.title)}` : 'Adaugă rapid';
+  openSheet(`<div class="sheet-head"><button class="link" data-act="close">Gata</button><b class="ellipsis">${title}</b><button class="link strong" data-act="q-add">Adaugă</button></div>
   <div class="sheet-body">
-    <input id="q" class="big" placeholder="ex: mâine la 18 sală #sport" autocomplete="off" enterkeyhint="send">
+    <input id="q" class="big" placeholder="${ev ? (preset.link.type === 'before' ? 'ex: pregătesc slide-urile 1h' : 'ex: trimit oferta până vineri') : 'ex: mâine la 18 sală #sport'}" autocomplete="off" enterkeyhint="send">
     <div id="q-prev" class="chips preview"></div>
     <div class="row-btns"><button class="btn" data-act="q-more">Mai multe opțiuni</button></div>
     <div class="hint">Scrie natural, eu înțeleg:<br>
-      <code>azi</code> <code>mâine</code> <code>poimâine</code> <code>vineri</code> <code>12.11</code> <code>cândva</code><br>
-      <code>la 15</code> <code>la 9:30</code> <code>la 8 seara</code> <code>14:00</code><br>
-      <code>45min</code> <code>2h</code> · <code>!</code> = important · <code>#muncă</code><br>
-      <code>zilnic</code> <code>săptămânal</code> <code>în fiecare lună</code> <code>în zilele lucrătoare</code><br>
-      Poți adăuga mai multe unul după altul – apasă Enter după fiecare.</div>
+      <code>azi</code> <code>mâine</code> <code>vineri</code> <code>12.11</code> <code>cândva</code> <code>până vineri</code><br>
+      <code>la 15</code> <code>la 9:30</code> <code>la 8 seara</code> <code>14:00</code> <code>45min</code> <code>2h</code><br>
+      <code>ședință</code> <code>întâlnire</code> <code>doctor</code> → devine întâlnire<br>
+      <code>pentru ședință</code> <code>după întâlnire</code> → îl leg de întâlnire<br>
+      <code>!</code> = important · <code>#muncă</code> · <code>zilnic</code> <code>lunea și joia</code><br>
+      Fără oră? Ți-o aleg eu ✨ · Enter după fiecare, ca să adaugi mai multe.</div>
     <div id="q-added"></div>
   </div>`);
   const inp = $('#q');
@@ -608,41 +1110,151 @@ function openQuick(base) {
   inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); quickAdd(); } });
   quickPreview();
 }
-function quickPreview() {
-  const v = $('#q').value;
+function quickParse(v) {
   const p = parseQuick(v, quickBase);
-  const c = cat(p.cat);
-  const chips = [];
+  if (quickPreset && quickPreset.link && !p.link) {
+    p.link = quickPreset.link; p.linkEv = findTask(quickPreset.link.id); p.kind = 'task';
+    if (p.link.type === 'after' && p.date === quickBase) p.date = p.link.ds;
+  }
+  return p;
+}
+function previewChips(p) {
+  const c = cat(p.cat), chips = [];
+  if (p.kind === 'event') chips.push('<span class="chip on">📍 Întâlnire</span>');
   chips.push(`<span class="chip">📅 ${p.date ? relDay(p.date) : 'Cândva'}</span>`);
   if (p.time) chips.push(`<span class="chip">⏰ ${p.time}</span>`);
+  else if (p.date && p.date <= todayStr() && p.kind !== 'event' && state.settings.autoPlan) chips.push('<span class="chip">✨ oră automată</span>');
   if (p.duration) chips.push(`<span class="chip">⏱ ${fmtDur(p.duration)}</span>`);
-  if (p.repeat !== 'none') chips.push(`<span class="chip">↻ ${REPEAT[p.repeat]}</span>`);
+  if (p.deadline) chips.push(`<span class="chip">⏳ până ${relDay(p.deadline).toLowerCase()}</span>`);
+  if (p.linkEv) chips.push(`<span class="chip">🔗 ${p.link.type === 'before' ? 'pentru' : 'după'} ${esc(p.linkEv.title)}</span>`);
+  if (p.repeat !== 'none') chips.push(`<span class="chip">↻ ${p.repeat === 'days' ? p.days.map((d) => ZS[d]).join(', ') : REPEAT[p.repeat]}</span>`);
   if (p.priority === 3) chips.push('<span class="chip" style="color:var(--danger)">❗ Important</span>');
   if (c) chips.push(`<span class="chip" style="--c:${c.color}"><span class="sw"></span>${esc(c.name)}</span>`);
-  $('#q-prev').innerHTML = v.trim() ? chips.join('') : '';
+  return chips.join('');
+}
+function quickPreview() {
+  const v = $('#q').value;
+  $('#q-prev').innerHTML = v.trim() ? previewChips(quickParse(v)) : '';
 }
 function quickToTask(p) {
   return {
-    id: uid(), title: p.title, notes: '', date: p.date, time: p.time || '', duration: p.duration || (p.time ? 30 : 0),
-    priority: p.priority, cat: p.cat, repeat: p.repeat, reminder: p.time ? state.settings.reminder : null,
-    subtasks: [], done: false, doneDates: [], createdAt: Date.now(),
+    ...baseTask(), title: p.title, date: p.date, time: p.time || '', duration: p.duration || (p.kind === 'event' ? 60 : 0),
+    priority: p.priority, cat: p.cat, repeat: p.repeat, days: p.days, kind: p.kind, deadline: p.deadline, link: p.link,
+    reminder: p.kind === 'event' ? Math.max(15, state.settings.reminder || 0) : state.settings.reminder,
   };
 }
 function quickAdd() {
   const inp = $('#q');
-  const p = parseQuick(inp.value, quickBase);
+  const p = quickParse(inp.value);
   if (!p.title) { inp.focus(); return; }
   const t = quickToTask(p);
   state.tasks.push(t);
-  save();
-  $('#q-added').insertAdjacentHTML('afterbegin', `<div class="card" style="margin-top:8px">${taskRow(t, t.date || '', { showDate: true })}</div>`);
+  afterAdd([t], true, true);
+  const fresh = findTask(t.id);
+  let html = `<div class="card" style="margin-top:8px">${taskRow(fresh, fresh.date || '', { showDate: true })}</div>`;
+  if (isEvent(t) && t.time && state.settings.autoFollow && !isRec(t)) html += '<div class="help" style="padding:6px 4px 0">✨ Am adăugat și „ce urmează după” – îți amintesc când se termină.</div>';
+  $('#q-added').insertAdjacentHTML('afterbegin', html);
   inp.value = '';
   quickPreview();
   inp.focus();
-  render();
 }
 
-// ---------- toast ----------
+// descărcare mentală (mai multe lucruri deodată)
+function openDump() {
+  openSheet(`<div class="sheet-head"><button class="link" data-act="close">Anulează</button><b>Descarcă-ți mintea</b><button class="link strong" data-act="dump-add">Adaugă tot</button></div>
+  <div class="sheet-body">
+    <textarea id="dump" style="min-height:230px;margin-top:0;font-size:17px" placeholder="Câte un lucru pe rând, de ex:
+ședință cu echipa la 11
+pregătesc prezentarea pentru ședință 1h !
+după ședință trimit rezumatul
+sun la bancă
+cumpărături mâine la 7 seara
+cadou pentru mama până vineri
+cândva vopsit gardul"></textarea>
+    <div id="dump-prev" class="dump-prev"></div>
+    <div class="hint">Le leg singur: ce scrii cu „pentru ședință” îți amintesc să termini înainte, ce scrii cu „după ședință” îți amintesc după. Ce e pentru azi și n-are oră îl pun în golurile din program.</div>
+  </div>`);
+  $('#dump').focus();
+  $('#dump').addEventListener('input', dumpPreview);
+}
+function dumpPreview() {
+  const lines = $('#dump').value.split('\n').map((l) => l.trim()).filter(Boolean);
+  $('#dump-prev').innerHTML = lines.length ? `<div class="help" style="padding:8px 4px">${lines.length} ${lines.length === 1 ? 'lucru' : 'lucruri'}</div>` : '';
+}
+function dumpAdd() {
+  const lines = $('#dump').value.split('\n').map((l) => l.trim().replace(/^[-•*]\s*/, '')).filter(Boolean);
+  if (!lines.length) return;
+  // întâi întâlnirile, ca restul să se poată lega de ele
+  const evLines = lines.filter((l) => parseQuick(l).kind === 'event');
+  const rest = lines.filter((l) => !evLines.includes(l));
+  const added = [];
+  for (const l of evLines.concat(rest)) {
+    const p = parseQuick(l);
+    if (!p.title) continue;
+    const t = quickToTask(p);
+    state.tasks.push(t); added.push(t);
+  }
+  closeSheet();
+  ui.tab = 'azi';
+  afterAdd(added, true, true);
+  const linked = added.filter((t) => t.link).length;
+  toast(`✓ ${added.length} lucruri adăugate${linked ? `, ${linked} legate de întâlniri` : ''}${state.settings.autoPlan ? ' · program refăcut ✨' : ''}`);
+}
+
+// previzualizare plan
+let pendingPlan = null;
+function openPlan(ds) {
+  const plan = planDay(ds);
+  pendingPlan = plan;
+  const fixed = tasksOn(ds).filter((t) => t.time && (isEvent(t) || !t.auto || isDone(t, ds)));
+  const rows = [...fixed.map((t) => ({ t, time: t.time, fixed: true })), ...plan.placed.map((p) => ({ ...p, fixed: false }))].sort((a, b) => a.time.localeCompare(b.time));
+  openSheet(`<div class="sheet-head"><button class="link" data-act="close">Anulează</button><b>Plan · ${relDay(ds)}</b><button class="link strong" data-act="plan-apply">Aplică</button></div>
+  <div class="sheet-body">
+    ${plan.placed.length ? `<div class="help" style="padding:0 4px 10px">Am pus ${plan.placed.length} ${plan.placed.length === 1 ? 'lucru' : 'lucruri'} în golurile din program (✨). Întâlnirile și orele puse de tine rămân neschimbate.</div>` : '<div class="help" style="padding:0 4px 10px">Nu am ce muta – totul are deja o oră.</div>'}
+    <div class="card plan">${rows.map((r) => {
+      const end = minToT(tMin(r.time) + (r.dur || durOf(r.t)));
+      return `<div class="prow ${r.fixed ? 'fixed' : 'new'} ${isEvent(r.t) ? 'ev' : ''}"><div class="pt">${r.time}<small>${end}</small></div><div class="pb"><div>${r.fixed ? (isEvent(r.t) ? '📍 ' : '') : '✨ '}${esc(r.t.title)}</div>
+        ${linkEvent(r.t) ? `<small>🔗 ${esc(linkLabel(r.t))}</small>` : r.t.deadline ? `<small>⏳ până ${relDay(r.t.deadline).toLowerCase()}</small>` : ''}</div></div>`;
+    }).join('') || '<div class="empty">Nimic de planificat.</div>'}</div>
+    ${plan.overflow.length ? `<div class="label" style="color:var(--warn)">Nu mai încap (${plan.overflow.length})</div>
+      <div class="card">${plan.overflow.map((t) => `<div class="prow"><div class="pb">${esc(t.title)} <small>· ${fmtDur(durOf(t))}</small></div></div>`).join('')}</div>
+      <label class="switch-row card" style="margin-top:10px;padding:12px 16px"><span>Mută-le pe ${relDay(addDays(ds, 1)).toLowerCase()}</span><input type="checkbox" class="sw" id="plan-move" checked></label>` : ''}
+    <div class="row-btns" style="margin-top:18px"><button class="btn primary" data-act="plan-apply">✓ Aplică planul</button></div>
+    <div class="hint">Program: ${state.settings.dayStart}–${state.settings.dayEnd}, ${state.settings.buffer} min pauză între lucruri. Le poți schimba din tab-ul Asistent.</div>
+  </div>`);
+}
+
+// configurare push (ntfy)
+function newTopic() { return 'ritm-' + Array.from(crypto.getRandomValues(new Uint8Array(14)), (b) => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join(''); }
+function openPushSetup() {
+  const S = state.settings;
+  if (!S.ntfyTopic) { S.ntfyTopic = newTopic(); persist(); }
+  openSheet(`<div class="sheet-head"><span style="width:60px"></span><b>Notificări push</b><button class="link strong" data-act="close">Gata</button></div>
+  <div class="sheet-body">
+    <div class="card howto">
+      <b>Ca să primești remindere chiar și când Ritm e închisă</b>, folosim aplicația gratuită <b>ntfy</b> (fără cont).
+      <ol>
+        <li>Instalează <b>ntfy</b> din App Store.</li>
+        <li>Deschide-o, apasă <b>+</b> și scrie exact acest canal:
+          <div class="topic"><code id="topic">${esc(S.ntfyTopic)}</code><button class="mini" data-act="copy-topic">Copiază</button></div></li>
+        <li>Lasă serverul implicit și apasă <b>Subscribe</b>. Permite notificările.</li>
+        <li>Apasă butonul de mai jos.</li>
+      </ol>
+    </div>
+    <div class="row-btns"><button class="btn primary" data-act="push-test">📨 Trimite un test</button></div>
+    <label class="switch-row card" style="margin-top:14px;padding:14px 16px"><span><b>Remindere push pornite</b></span><input type="checkbox" class="sw" id="s-ntfy" ${S.ntfyOn ? 'checked' : ''}></label>
+    <div class="hint">
+      • Ritm programează reminderele pentru următoarele ~3 zile de fiecare dată când o deschizi. Deschide-o măcar o dată la 2 zile (oricum o faci 🙂).<br>
+      • Dacă muți sau termini ceva după ce reminderul a fost programat, s-ar putea să primești totuși reminderul vechi.<br>
+      • Canalul e ca o parolă: cine îl știe poate vedea reminderele (titlurile taskurilor trec prin serverul ntfy.sh). Nu-l da nimănui. <button class="link" data-act="new-topic">Generează alt canal</button><br>
+      • Variantă fără altă aplicație: „Adaugă în Calendarul iPhone” din detaliile unui task – alarma vine din Calendarul iPhone.
+    </div>
+  </div>`);
+}
+
+// ============================================================
+// Toast
+// ============================================================
 let toastTimer;
 function toast(msg, actLabel, fn) {
   const el = $('#toast');
@@ -650,29 +1262,32 @@ function toast(msg, actLabel, fn) {
   el.hidden = false;
   if (actLabel) $('#toast-btn').onclick = () => { el.hidden = true; fn(); };
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.hidden = true; }, actLabel ? 5000 : 2200);
+  toastTimer = setTimeout(() => { el.hidden = true; }, actLabel ? 5000 : 2800);
 }
 
-// ---------- calendar iPhone (.ics) ----------
+// ============================================================
+// Calendar iPhone (.ics)
+// ============================================================
 const icsEsc = (s) => String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
 const icsDate = (ds) => ds.replace(/-/g, '');
-function icsUtcStamp() { return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, ''); }
+const icsUtcStamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+const BYDAY = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
 function vevent(t) {
   const L = ['BEGIN:VEVENT', `UID:${t.id}@ritm`, `DTSTAMP:${icsUtcStamp()}`, `SUMMARY:${icsEsc(t.title)}`];
   if (t.time) {
-    const s = tMin(t.time), e = s + (t.duration || 30);
+    const s = tMin(t.time), e = s + durOf(t);
     const endDay = e >= 1440 ? addDays(t.date, 1) : t.date;
     L.push(`DTSTART:${icsDate(t.date)}T${t.time.replace(':', '')}00`, `DTEND:${icsDate(endDay)}T${minToT(e % 1440).replace(':', '')}00`);
   } else {
     L.push(`DTSTART;VALUE=DATE:${icsDate(t.date)}`, `DTEND;VALUE=DATE:${icsDate(addDays(t.date, 1))}`);
   }
-  const rr = { daily: 'FREQ=DAILY', weekdays: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', weekly: 'FREQ=WEEKLY', monthly: 'FREQ=MONTHLY' }[t.repeat];
+  const rr = { daily: 'FREQ=DAILY', weekdays: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', weekly: 'FREQ=WEEKLY', monthly: 'FREQ=MONTHLY', days: `FREQ=WEEKLY;BYDAY=${(t.days || []).map((d) => BYDAY[d]).join(',')}` }[t.repeat];
   if (rr) L.push(`RRULE:${rr}`);
-  const desc = [t.notes, ...(t.subtasks || []).map((s) => `${s.done ? '☑' : '☐'} ${s.t}`)].filter(Boolean).join('\n');
+  const desc = [linkEvent(t) ? `Legat de: ${linkLabel(t)}` : '', t.notes, ...(t.subtasks || []).map((s) => `${s.done ? '☑' : '☐'} ${s.t}`)].filter(Boolean).join('\n');
   if (desc) L.push(`DESCRIPTION:${icsEsc(desc)}`);
-  const rem = t.reminder != null ? t.reminder : (t.time ? state.settings.reminder : null);
-  if (rem != null) L.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEsc(t.title)}`, `TRIGGER:-PT${rem}M`, 'END:VALARM');
-  else if (!t.time) L.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEsc(t.title)}`, 'TRIGGER:PT9H', 'END:VALARM');
+  const rem = t.reminder != null ? t.reminder : state.settings.reminder;
+  if (t.time && rem != null) L.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEsc(t.title)}`, `TRIGGER:-PT${rem}M`, 'END:VALARM');
+  else if (!t.time) L.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEsc(t.title)}`, `TRIGGER:PT${tMin(state.settings.morning || '08:00')}M`, 'END:VALARM');
   L.push('END:VEVENT');
   return L;
 }
@@ -680,11 +1295,12 @@ function downloadIcs(tasks, name) {
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Ritm//RO', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH'];
   tasks.forEach((t) => lines.push(...vevent(t)));
   lines.push('END:VCALENDAR');
-  const blob = new Blob([lines.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
-  const file = new File([blob], name, { type: 'text/calendar' });
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    navigator.share({ files: [file], title: name }).catch(() => openBlob(blob, name));
-  } else openBlob(blob, name);
+  shareFile(new Blob([lines.join('\r\n')], { type: 'text/calendar;charset=utf-8' }), name, 'text/calendar');
+}
+function shareFile(blob, name, type) {
+  const file = new File([blob], name, { type });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) navigator.share({ files: [file], title: name }).catch(() => openBlob(blob, name));
+  else openBlob(blob, name);
 }
 function openBlob(blob, name) {
   const url = URL.createObjectURL(blob);
@@ -694,46 +1310,9 @@ function openBlob(blob, name) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
-// ---------- notificări ----------
-async function notify(title, body, tag) {
-  try {
-    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-      const reg = await navigator.serviceWorker.ready;
-      await reg.showNotification(title, { body, tag, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png' });
-    } else new Notification(title, { body, tag, icon: 'icons/icon-192.png' });
-  } catch (e) { /* ignorăm */ }
-}
-function checkReminders() {
-  if (!state.settings.notify || !('Notification' in window) || Notification.permission !== 'granted') return;
-  const now = Date.now();
-  const t = todayStr();
-  let changed = false;
-  for (const ds of [t, addDays(t, 1)]) {
-    for (const x of tasksOn(ds)) {
-      if (!x.time || x.reminder == null || isDone(x, ds)) continue;
-      const start = parseYmd(ds); start.setHours(0, tMin(x.time), 0, 0);
-      const at = start.getTime() - x.reminder * 60000;
-      const key = `${x.id}|${ds}`;
-      if (now >= at && now < start.getTime() + 10 * 60000 && !state.sent[key]) {
-        state.sent[key] = 1; changed = true;
-        notify(x.title, x.reminder ? `Începe la ${x.time}${x.reminder >= 60 ? '' : ` (în ${x.reminder} min)`}` : `Acum, la ${x.time}`, key);
-      }
-    }
-  }
-  if (changed) {
-    const cutoff = addDays(t, -2);
-    for (const k of Object.keys(state.sent)) if (k.split('|')[1] < cutoff) delete state.sent[k];
-    save();
-  }
-}
-function updateBadge() {
-  if (!navigator.setAppBadge) return;
-  const t = todayStr();
-  const n = tasksOn(t).filter((x) => !isDone(x, t)).length + overdue().length;
-  (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
-}
-
-// ---------- cronometru focus ----------
+// ============================================================
+// Cronometru focus
+// ============================================================
 let audioCtx;
 function beep() {
   try {
@@ -783,9 +1362,11 @@ function tick() {
   }
 }
 
-// ---------- evenimente ----------
+// ============================================================
+// Acțiuni
+// ============================================================
 const actions = {
-  tab(el) { ui.tab = el.dataset.tab; if (ui.tab === 'cal') ui.calSel = ui.calSel || todayStr(); render(); window.scrollTo(0, 0); },
+  tab(el) { ui.tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
   fab() { openQuick(ui.tab === 'cal' ? ui.calSel : undefined); },
   toggle(el, id, ds) {
     const t = findTask(id); if (!t) return;
@@ -799,22 +1380,90 @@ const actions = {
     }
   },
   edit(el, id, ds) { const t = findTask(id); if (t) openEditor(t, ds); },
-  'move-today'(el, id) { const t = findTask(id); if (!t) return; t.date = todayStr(); save(); render(); toast('Mutat pe azi'); },
-  'move-all-today'() { const n = overdue(); n.forEach((t) => { t.date = todayStr(); }); save(); render(); toast(`${n.length} mutate pe azi`); },
-  'add-on'(el) { openQuick(el.dataset.d); },
+  'move-today'(el, id) { const t = findTask(id); if (!t) return; moveTo(t, todayStr(), false); afterAdd([t], false, false); },
+  'move-tomorrow'(el) { const t = findTask(el.dataset.v); if (!t) return; moveTo(t, addDays(todayStr(), 1)); save(); render(); toast('Mutat pe mâine'); },
+  'move-all-today'() { const n = overdue(); n.forEach((t) => moveTo(t, todayStr(), false)); save(); autoPlanToday(true); render(); toast(`${n.length} mutate pe azi`); },
+  'move-low'() {
+    const t = todayStr(), S = state.settings, nm = nowMin();
+    const low = tasksOn(t).filter((x) => !isDone(x, t) && !isRec(x) && !isEvent(x) && x.priority < 3 && !x.deadline && !x.link && (!x.time || x.auto));
+    let need = tasksOn(t).filter((x) => !isDone(x, t) && (!x.time || tMin(x.time) >= nm)).reduce((s, x) => s + durOf(x), 0);
+    const free = tMin(S.dayEnd) - Math.max(nm, tMin(S.dayStart));
+    const moved = [];
+    for (const x of low.sort((a, b) => a.priority - b.priority)) { if (need <= free) break; moveTo(x, addDays(t, 1)); need -= durOf(x); moved.push(x); }
+    save(); autoPlanToday(true); render();
+    toast(moved.length ? `Am mutat ${moved.length} pe mâine` : 'N-am găsit ce să mut fără să afectez lucrurile importante');
+  },
+  'eve-move'() {
+    const t = todayStr();
+    const left = tasksOn(t).filter((x) => !isDone(x, t) && !isRec(x) && !isEvent(x));
+    left.forEach((x) => moveTo(x, addDays(t, 1)));
+    save(); render(); toast(`${left.length} mutate pe mâine. Somn ușor! 🌙`);
+  },
+  'del-task'(el) {
+    const i = state.tasks.findIndex((x) => x.id === el.dataset.v); if (i < 0) return;
+    const [removed] = state.tasks.splice(i, 1);
+    save(); render();
+    toast('Șters', 'Anulează', () => { state.tasks.splice(i, 0, removed); save(); render(); });
+  },
+  dismiss(el) {
+    state.dismissed[el.dataset.v] = todayStr();
+    const cutoff = addDays(todayStr(), -30);
+    for (const [k, d] of Object.entries(state.dismissed)) if (d < cutoff) delete state.dismissed[k];
+    save(); render();
+  },
+  followup(el, id, ds) { openQuick(ds || todayStr(), { link: { id, ds: ds || todayStr(), type: 'after' } }); },
+  'add-on'(el) { openQuick(el.dataset.v); },
+  'plan-day'() { openPlan(todayStr()); },
+  'plan-tomorrow'() { openPlan(addDays(todayStr(), 1)); },
+  'plan-sel'() { if (ui.calSel < todayStr()) { toast('Nu pot planifica în trecut'); return; } openPlan(ui.calSel); },
+  'plan-apply'() {
+    if (!pendingPlan) return;
+    const mv = $('#plan-move') ? $('#plan-move').checked : false;
+    const plan = pendingPlan;
+    applyPlan(plan, mv);
+    closeSheet(); render();
+    toast(`✨ Plan aplicat${plan.placed.length ? ` – ${plan.placed.length} lucruri programate` : ''}`);
+  },
+  dump() { openDump(); },
+  'dump-add'() { dumpAdd(); },
+  tpl(el) {
+    const tp = TEMPLATES.find((x) => x.id === el.dataset.v); if (!tp) return;
+    state.tasks.push(...tp.tasks().map((o) => ({ ...baseTask(), ...o, tpl: tp.id })));
+    save(); render(); toast(`${tp.icon} ${tp.name} – adăugat`);
+  },
+  'push-setup'() { openPushSetup(); },
+  'copy-topic'() {
+    const v = state.settings.ntfyTopic;
+    (navigator.clipboard ? navigator.clipboard.writeText(v) : Promise.reject()).then(() => toast('Copiat ✓')).catch(() => {
+      const r = document.createRange(); r.selectNode($('#topic')); getSelection().removeAllRanges(); getSelection().addRange(r); toast('Selectat – apasă Copiază');
+    });
+  },
+  async 'push-test'() {
+    try {
+      await ntfySend('Ritm funcționează! 🎉', 'De acum primești aici reminderele tale.');
+      state.settings.ntfyOn = true; state.pushed = {}; save();
+      if ($('#s-ntfy')) $('#s-ntfy').checked = true;
+      toast('Trimis! Verifică notificarea pe telefon');
+    } catch (e) { toast('Nu am putut trimite. Verifică internetul.'); }
+  },
+  'new-topic'() {
+    if (!confirm('Generez un canal nou? Va trebui să te abonezi din nou în ntfy.')) return;
+    state.settings.ntfyTopic = newTopic(); state.pushed = {}; save(); openPushSetup();
+  },
   'focus-on'(el, id) { const T = timerObj(); T.taskId = id; ui.tab = 'focus'; if (!T.running) actions['t-start'](); else { save(); render(); } },
+  fsub(el) { const tk = findTask(timerObj().taskId); if (!tk) return; const s = tk.subtasks[+el.dataset.v]; s.done = !s.done; save(); render(); },
   'cal-prev'() { const d = parseYmd(ui.calMonth); d.setMonth(d.getMonth() - 1); ui.calMonth = ymd(d); render(); },
   'cal-next'() { const d = parseYmd(ui.calMonth); d.setMonth(d.getMonth() + 1); ui.calMonth = ymd(d); render(); },
   'cal-today'() { ui.calSel = todayStr(); ui.calMonth = todayStr().slice(0, 8) + '01'; render(); },
-  'cal-day'(el) { ui.calSel = el.dataset.d; if (ui.calSel.slice(0, 7) !== ui.calMonth.slice(0, 7)) ui.calMonth = ui.calSel.slice(0, 8) + '01'; render(); },
-  'list-mode'(el) { ui.listMode = el.dataset.v; render(); },
+  'cal-day'(el) { ui.calSel = el.dataset.v; if (ui.calSel.slice(0, 7) !== ui.calMonth.slice(0, 7)) ui.calMonth = ui.calSel.slice(0, 8) + '01'; render(); },
+  'list-mode'(el) { ui.listMode = el.dataset.v; $('#listbody').innerHTML = viewList(); },
   'clear-done'() {
     const removed = state.tasks.filter((x) => !isRec(x) && x.done);
     state.tasks = state.tasks.filter((x) => isRec(x) || !x.done);
     save(); render();
     toast(`${removed.length} șterse`, 'Anulează', () => { state.tasks.push(...removed); save(); render(); });
   },
-  // timer
+  // cronometru
   't-start'() {
     const T = timerObj();
     try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch (e) { /* */ }
@@ -837,23 +1486,38 @@ const actions = {
       T.running = false; T.left = state.settings.work * 60;
     }
     if (!isDone(t, todayStr())) toggleDone(t, isRec(t) ? todayStr() : null);
-    T.taskId = null; save(); render(); toast('Bravo! Task terminat 🎉');
+    T.taskId = null; save(); ui.tab = 'azi'; render(); toast('Bravo! Task terminat 🎉');
   },
-  // sheet
+  // editor
   close() { closeSheet(); },
   save() { saveDraft(); },
+  kind(el) { syncDraft(); draft.kind = el.dataset.v; if (draft.kind === 'event' && !draft.duration) draft.duration = 60; $('#sheet').innerHTML = editorHtml(); },
   setdate(el) { const v = el.dataset.v; $('#f-date').value = v === '' ? '' : addDays(todayStr(), +v); },
   prio(el) { draft.priority = +el.dataset.v; $$('#f-prio button').forEach((b) => b.classList.toggle('on', b === el)); },
   pickcat(el) { draft.cat = el.dataset.v || null; $$('#f-cats .chip').forEach((b) => b.classList.toggle('on', b === el)); },
+  day(el) {
+    const n = +el.dataset.v; draft.days = draft.days || [];
+    const i = draft.days.indexOf(n); if (i >= 0) draft.days.splice(i, 1); else draft.days.push(n);
+    el.classList.toggle('on', i < 0);
+  },
   addsub() {
     const inp = $('#f-newsub'); const v = inp.value.trim(); if (!v) return;
     draft.subtasks = draft.subtasks || []; draft.subtasks.push({ t: v, done: false });
     inp.value = ''; $('#f-subs').innerHTML = subsHtml(); inp.focus();
   },
-  subtoggle(el) { const s = draft.subtasks[+el.dataset.i]; s.done = !s.done; $('#f-subs').innerHTML = subsHtml(); },
-  subdel(el) { draft.subtasks.splice(+el.dataset.i, 1); $('#f-subs').innerHTML = subsHtml(); },
-  postpone() { syncDraft(); const base = draft.date && draft.date > todayStr() ? draft.date : todayStr(); $('#f-date').value = addDays(base, 1); saveDraft(); toast('Amânat pe ' + relDay(addDays(base, 1)).toLowerCase()); },
-  'ed-focus'() { const id = draft.id; saveDraft(); actions['focus-on'](null, id); },
+  subtoggle(el) { const s = draft.subtasks[+el.dataset.v]; s.done = !s.done; $('#f-subs').innerHTML = subsHtml(); },
+  subdel(el) { draft.subtasks.splice(+el.dataset.v, 1); $('#f-subs').innerHTML = subsHtml(); },
+  'ev-prep'() { const ds = draft._ds; const ev = saveDraft(true); if (ev) openQuick(ds || ev.date, { link: { id: ev.id, ds: ds || ev.date, type: 'before' } }); },
+  'ev-after'() { const ds = draft._ds; const ev = saveDraft(true); if (ev) openQuick(ds || ev.date, { link: { id: ev.id, ds: ds || ev.date, type: 'after' } }); },
+  postpone() {
+    syncDraft();
+    const base = draft.date && draft.date > todayStr() ? draft.date : todayStr();
+    $('#f-date').value = addDays(base, 1);
+    draft.postponed = (draft.postponed || 0) + 1;
+    if (draft.auto) { $('#f-time').value = ''; draft.time = ''; }
+    if (saveDraft(true)) toast('Amânat pe ' + relDay(addDays(base, 1)).toLowerCase());
+  },
+  'ed-focus'() { const t = saveDraft(true); if (t) actions['focus-on'](null, t.id); },
   'ics-one'() {
     syncDraft();
     if (!draft.date) { toast('Alege întâi o dată'); return; }
@@ -865,15 +1529,13 @@ const actions = {
     const id = draft.id; const i = state.tasks.findIndex((x) => x.id === id); if (i < 0) return;
     const [removed] = state.tasks.splice(i, 1);
     save(); closeSheet(); render();
-    toast('Task șters', 'Anulează', () => { state.tasks.splice(i, 0, removed); save(); render(); });
+    toast('Șters', 'Anulează', () => { state.tasks.splice(i, 0, removed); save(); render(); });
   },
   'q-add'() { quickAdd(); },
   'q-more'() {
-    const v = $('#q').value;
-    const p = parseQuick(v, quickBase);
+    const p = quickParse($('#q').value);
     closeSheet();
-    const t = quickToTask(p);
-    openEditor(null, null, { ...t, id: null });
+    openEditor(null, null, { ...quickToTask(p), id: null });
   },
   // setări
   async notif() {
@@ -881,7 +1543,7 @@ const actions = {
     if (Notification.permission === 'granted') { state.settings.notify = !state.settings.notify; save(); render(); toast(state.settings.notify ? 'Notificări pornite' : 'Notificări oprite'); return; }
     const p = await Notification.requestPermission();
     state.settings.notify = p === 'granted'; save(); render();
-    if (p === 'granted') { notify('Ritm', 'Notificările merg! 🔔', 'test'); } else toast('Permisiune refuzată – o poți activa din Setări iPhone');
+    if (p === 'granted') notify('Ritm', 'Notificările merg! 🔔', 'test'); else toast('Permisiune refuzată – o poți activa din Setări iPhone');
   },
   'ics-all'() {
     const t = todayStr();
@@ -897,19 +1559,16 @@ const actions = {
     state.tasks.forEach((t) => { if (t.cat === id) t.cat = null; });
     save(); render();
   },
-  export() {
-    const blob = new Blob([JSON.stringify(state, null, 1)], { type: 'application/json' });
-    const name = `ritm-backup-${todayStr()}.json`;
-    const file = new File([blob], name, { type: 'application/json' });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) navigator.share({ files: [file] }).catch(() => openBlob(blob, name));
-    else openBlob(blob, name);
-  },
+  export() { shareFile(new Blob([JSON.stringify(state, null, 1)], { type: 'application/json' }), `ritm-backup-${todayStr()}.json`, 'application/json'); },
   wipe() {
     if (!confirm('Sigur ștergi TOATE taskurile și setările? Nu se poate anula.')) return;
     state = seed(); state.tasks = []; save(); render(); toast('Totul a fost șters');
   },
 };
 
+// ============================================================
+// Evenimente
+// ============================================================
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
   if (!el) return;
@@ -921,13 +1580,20 @@ document.addEventListener('click', (e) => {
 $('#backdrop').addEventListener('click', closeSheet);
 
 document.addEventListener('input', (e) => {
-  if (e.target.id === 'search') {
-    ui.search = e.target.value;
-    $('#listbody').innerHTML = viewList();
-  }
+  if (e.target.id === 'search') { ui.search = e.target.value; $('#listbody').innerHTML = viewList(); }
 });
+const SETTING_INPUTS = {
+  's-morning': (v) => ({ morning: v || '08:00' }), 's-evening': (v) => ({ evening: v || '21:00' }),
+  's-start': (v) => ({ dayStart: v || '08:00' }), 's-end': (v) => ({ dayEnd: v || '22:00' }),
+  's-buffer': (v) => ({ buffer: +v }), 's-defdur': (v) => ({ defaultDur: +v }), 's-prep': (v) => ({ prepLead: +v }),
+};
 document.addEventListener('change', (e) => {
   const el = e.target, S = state.settings;
+  if (SETTING_INPUTS[el.id]) { Object.assign(S, SETTING_INPUTS[el.id](el.value)); save(); return; }
+  if (el.id === 's-autoplan') { S.autoPlan = el.checked; save(); if (S.autoPlan) { autoPlanToday(false); render(); } return; }
+  if (el.id === 's-autofollow') { S.autoFollow = el.checked; save(); return; }
+  if (el.id === 's-ntfy') { S.ntfyOn = el.checked; state.pushed = {}; save(); toast(S.ntfyOn ? 'Remindere push pornite' : 'Remindere push oprite'); return; }
+  if (el.id === 'f-rep') { $('#f-days').hidden = el.value !== 'days'; return; }
   if (el.id === 'focus-task') { timerObj().taskId = el.value || null; save(); render(); return; }
   if (el.id === 's-rem') { S.reminder = el.value === 'null' ? null : +el.value; save(); return; }
   if (el.id === 's-work') { S.work = Math.min(120, Math.max(5, +el.value || 25)); const T = timerObj(); if (!T.running && T.mode === 'work') T.left = S.work * 60; save(); return; }
@@ -942,7 +1608,7 @@ document.addEventListener('change', (e) => {
         const s = JSON.parse(r.result);
         if (!Array.isArray(s.tasks)) throw new Error('format');
         if (!confirm(`Restaurezi copia cu ${s.tasks.length} taskuri? Datele actuale vor fi înlocuite.`)) return;
-        state = { cats: DEFAULT_CATS, focusLog: {}, timer: null, sent: {}, ...s, settings: { ...DEFAULT_SETTINGS, ...(s.settings || {}) } };
+        state = hydrate(s);
         save(); render(); toast('Copie restaurată ✓');
       } catch (err) { toast('Fișier invalid'); }
     };
@@ -956,26 +1622,41 @@ document.addEventListener('keydown', (e) => {
 });
 
 let lastDay = todayStr();
+function onNewDayOrOpen() {
+  if (todayStr() !== lastDay) { lastDay = todayStr(); ui.calSel = lastDay; }
+  if (!state.settings.autoPlan) return;
+  // dacă a trecut ora unui task pus automat și nu l-ai bifat, îl mut în următorul gol liber
+  const t = todayStr(), nm = nowMin();
+  const missed = tasksOn(t).filter((x) => x.auto && x.time && !isDone(x, t) && endMin(x) <= nm);
+  if (state.lastAutoPlan !== t || missed.length) {
+    autoPlanToday(true);
+    if (missed.length) toast(`✨ Am mutat mai încolo ${missed.length === 1 ? q(missed[0].title) : missed.length + ' lucruri'} pe care nu le-ai apucat`);
+  }
+}
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
-    if (todayStr() !== lastDay) { lastDay = todayStr(); ui.calSel = lastDay; }
-    tick(); checkReminders();
+    onNewDayOrOpen();
+    tick(); checkReminders(); schedulePushes();
     if ($('#sheet').hidden) render();
   }
 });
+window.addEventListener('online', schedulePushes);
 
 setInterval(tick, 1000);
 setInterval(() => {
   checkReminders();
-  if (todayStr() !== lastDay) { lastDay = todayStr(); ui.calSel = lastDay; if ($('#sheet').hidden) render(); }
-  else if (ui.tab === 'azi' && $('#sheet').hidden) render();
+  const newDay = todayStr() !== lastDay;
+  if (newDay) onNewDayOrOpen();
+  if ($('#sheet').hidden && (newDay || ui.tab === 'azi' || ui.tab === 'asist')) render();
 }, 30000);
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
+onNewDayOrOpen();
 render();
 tick();
 checkReminders();
 updateBadge();
+setTimeout(schedulePushes, 1500);
