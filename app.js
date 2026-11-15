@@ -133,10 +133,25 @@ let examTimer = null;
 
 const routes = { home: viewHome, practice: viewPracticeSetup, review: viewReview, exam: viewExamSetup, more: viewMore, list: viewList, ai: viewAIGenerate };
 
+// Dialog de confirmare în pagină (înlocuiește confirm(), care nu merge peste tot).
+function askConfirm(msg, okLabel = 'Da') {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'modal';
+    wrap.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true"><p>${esc(msg)}</p><div class="row end"><button class="btn" data-r="0">Anulează</button><button class="btn primary" data-r="1">${esc(okLabel)}</button></div></div>`;
+    const done = (v) => { wrap.remove(); resolve(v); };
+    wrap.onclick = (e) => { const b = e.target.closest('[data-r]'); if (b) done(b.dataset.r === '1'); else if (e.target === wrap) done(false); };
+    document.body.appendChild(wrap);
+    wrap.querySelector('[data-r="1"]').focus();
+  });
+}
+
 function go(name, arg) {
-  if (session?.mode === 'exam' && !session.finished && name !== 'session') {
-    if (!confirm('Ieși din simulare? Răspunsurile date până acum se pierd.')) return;
-    stopExamTimer();
+  if (session?.mode === 'exam' && !session.finished) {
+    askConfirm('Ieși din simulare? Răspunsurile date până acum se pierd.', 'Ieși').then((ok) => {
+      if (ok) { stopExamTimer(); session = null; go(name, arg); }
+    });
+    return;
   }
   session = null;
   document.querySelectorAll('.tabbar button').forEach((b) => b.classList.toggle('active', b.dataset.go === name));
@@ -499,7 +514,7 @@ function renderExam() {
   document.getElementById('next').onclick = () => { s.idx++; renderExam(); };
   document.getElementById('finish').onclick = () => {
     const un = s.ids.length - answered;
-    if (confirm(un ? `Ai ${un} grile fără răspuns. Predai lucrarea?` : 'Predai lucrarea?')) finishExam();
+    askConfirm(un ? `Ai ${un} grile fără răspuns. Predai lucrarea?` : 'Predai lucrarea?', 'Predau').then((ok) => ok && finishExam());
   };
   document.querySelector('.navgrid').onclick = (e) => { const b = e.target.closest('[data-j]'); if (b) { s.idx = Number(b.dataset.j); renderExam(); } };
 }
@@ -546,7 +561,7 @@ function finishExam() {
 
 // ───────────────────────── Tastatură ─────────────────────────
 document.addEventListener('keydown', (e) => {
-  if (!session || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
+  if (!session || document.querySelector('.modal') || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
   const k = e.key.toUpperCase();
   const i = LETTERS.indexOf(k);
   const id = session.ids?.[session.idx], q = QMAP.get(id);
@@ -812,14 +827,14 @@ function viewMore() {
     try {
       const data = JSON.parse(await f.text());
       if (!data || typeof data !== 'object' || !data.progress) throw new Error();
-      if (!confirm('Restaurarea înlocuiește progresul actual. Continui?')) return;
+      if (!(await askConfirm('Restaurarea înlocuiește progresul actual. Continui?', 'Restaurează'))) return;
       const d = defaultState();
       state = { ...d, ...data, settings: { ...d.settings, ...(data.settings || {}), apiKey: st.apiKey } };
       save(); refreshBank(); applyTheme(); toast('Backup restaurat.'); go('home');
     } catch { toast('Fișier de backup invalid.'); }
   };
-  document.getElementById('bReset').onclick = () => {
-    if (!confirm('Ștergi tot progresul (răspunsuri, statistici, simulări)? Grilele proprii și setările rămân.')) return;
+  document.getElementById('bReset').onclick = async () => {
+    if (!(await askConfirm('Ștergi tot progresul (răspunsuri, statistici, simulări)? Grilele proprii și setările rămân.', 'Șterge'))) return;
     state.progress = {}; state.days = {}; state.exams = []; save(); toast('Progres resetat.'); go('home');
   };
 }
