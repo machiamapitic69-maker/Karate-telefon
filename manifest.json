@@ -1,0 +1,14 @@
+{
+  "name": "Dr. IonDeli — Rezidențiat",
+  "short_name": "Dr. IonDeli",
+  "description": "Pregătire pentru examenul de rezidențiat",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f7f9",
+  "theme_color": "#0f766e",
+  "lang": "ro",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dr. IonDeli</title>
+<meta name="description" content="Pregătire pentru examenul de rezidențiat: grile, simulări, repetiție spațiată și tutor AI.">
+<meta name="theme-color" content="#0f766e">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <button class="brand" data-go="home" aria-label="Acasă">
+    <img src="icon.svg" alt="" width="32" height="32"><span>Dr. IonDeli</span>
+  </button>
+  <div class="streak" id="streakBadge" title="Zile consecutive de studiu">🔥 0</div>
+</header>
+
+<main id="view" tabindex="-1"></main>
+
+<nav class="tabbar" aria-label="Navigare">
+  <button data-go="home"><span>🏠</span>Acasă</button>
+  <button data-go="practice"><span>📚</span>Învață</button>
+  <button data-go="review"><span>🔁</span>Recapitulare</button>
+  <button data-go="exam"><span>⏱️</span>Simulare</button>
+  <button data-go="more"><span>⚙️</span>Mai mult</button>
+</nav>
+
+<script src="data/questions.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
